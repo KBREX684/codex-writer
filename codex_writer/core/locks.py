@@ -5,9 +5,11 @@ from filelock import FileLock, Timeout as FileLockTimeout
 from codex_writer.core.errors import LockAlreadyHeld
 from codex_writer.core.paths import lock_path
 
+DEFAULT_LOCK_TIMEOUT = 30
+
 
 class project_write_lock:
-    def __init__(self, project_root: Path, timeout: float = 30):
+    def __init__(self, project_root: Path, timeout: float = DEFAULT_LOCK_TIMEOUT):
         self._path = lock_path(project_root)
         self._timeout = timeout
         self._lock = FileLock(str(self._path), timeout=timeout)

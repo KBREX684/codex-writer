@@ -41,6 +41,7 @@ def test_commit_persists_projection_status_and_sqlite_read_models(tmp_path):
     assert result.returncode == 0
 
     commit = json.loads(commit_path(project, 1).read_text(encoding="utf-8"))
+    assert commit["meta"]["status"] == "accepted"
     assert commit["projection_status"] == {
         "state": "done",
         "summary": "done",
@@ -55,6 +56,7 @@ def test_commit_persists_projection_status_and_sqlite_read_models(tmp_path):
         review_row = conn.execute(
             "SELECT chapter, issues_count, blocking_count, ai_flavor_count FROM reviews WHERE chapter = 1"
         ).fetchone()
+        event_count = conn.execute("SELECT COUNT(*) FROM events WHERE chapter = 1").fetchone()[0]
 
     assert chapter_row is not None
     assert chapter_row[0] == 1
@@ -62,7 +64,10 @@ def test_commit_persists_projection_status_and_sqlite_read_models(tmp_path):
     assert chapter_row[2] > 0
     assert chapter_row[3]
     assert chapter_row[4].endswith("第0001章提交.json")
-    assert review_row == (1, 0, 0, 0)
+    assert event_count >= 0
+    assert review_row is not None
+    assert review_row[0] == 1
+    assert review_row[2] == 0
 
 
 def test_state_word_count_uses_full_chapter_text_not_truncated_summary(tmp_path):

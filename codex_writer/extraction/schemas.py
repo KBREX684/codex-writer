@@ -26,4 +26,6 @@ def validate_extraction_result(data: dict) -> list[str]:
         errors.append("scenes 必须是数组")
     if not isinstance(data.get("dominant_thread"), str):
         errors.append("dominant_thread 必须是字符串")
+    if not isinstance(data.get("entities_appeared"), list):
+        errors.append("entities_appeared 必须是数组")
     return errors

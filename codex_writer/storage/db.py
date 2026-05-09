@@ -93,6 +93,10 @@ def connect_db(project_root: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("SELECT 1 FROM events LIMIT 0")
+    except sqlite3.OperationalError:
+        conn.executescript(SCHEMA_SQL)
     return conn
 
 
@@ -103,7 +107,6 @@ def init_schema(project_root: Path) -> None:
 
 
 def insert_event(project_root: Path, event: dict) -> None:
-    _ensure_schema(project_root)
     with connect_db(project_root) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO events (event_id, chapter, event_type, subject, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -114,7 +117,6 @@ def insert_event(project_root: Path, event: dict) -> None:
 
 
 def upsert_chapter(project_root: Path, record: dict) -> None:
-    _ensure_schema(project_root)
     with connect_db(project_root) as conn:
         conn.execute(
             """
@@ -136,7 +138,6 @@ def upsert_chapter(project_root: Path, record: dict) -> None:
 
 
 def replace_review(project_root: Path, record: dict) -> None:
-    _ensure_schema(project_root)
     with connect_db(project_root) as conn:
         conn.execute(
             "DELETE FROM reviews WHERE chapter = ? AND review_path = ?",
@@ -160,7 +161,6 @@ def replace_review(project_root: Path, record: dict) -> None:
 
 
 def insert_agent_run(project_root: Path, record: dict) -> None:
-    _ensure_schema(project_root)
     with connect_db(project_root) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO agent_runs (task_id, run_id, chapter, agent, provider, model, status, input_refs_json, output_ref, usage_json, error_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -171,17 +171,3 @@ def insert_agent_run(project_root: Path, record: dict) -> None:
              record.get("created_at", ""))
         )
         conn.commit()
-
-
-def _ensure_schema(project_root: Path) -> None:
-    db_path = index_db_path(project_root)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    try:
-        conn.execute("SELECT 1 FROM events LIMIT 0")
-    except sqlite3.OperationalError:
-        conn.executescript(SCHEMA_SQL)
-        conn.commit()
-    conn.close()

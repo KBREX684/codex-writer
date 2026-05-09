@@ -45,9 +45,19 @@ def write_markdown_atomic(path: Path, content: str) -> None:
         raise AtomicWriteError(f"原子写入失败: {path} -> {e}")
 
 
+_JSON_STORE_CACHE: dict = {}
+
+def read_json_store(path: Path, default: dict) -> dict:
+    if path.exists():
+        return read_json(path)
+    return default
+
+def write_json_store(path: Path, data: dict) -> None:
+    write_json_atomic(path, data)
+
+
 def append_jsonl(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         f.flush()
-        os.fsync(f.fileno())

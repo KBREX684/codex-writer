@@ -1,12 +1,14 @@
 {
   "name": "codex-writer",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "中文长篇网文写作插件",
   "entry": "scripts/codex_writer.py",
   "commands": [
     "init", "doctor", "plan", "context", "write", "review",
     "extract", "commit", "query", "status", "events",
     "migrate", "backup", "restore", "repair",
-    "agents", "route-test", "run-agent"
+    "agents", "route-test", "run-agent",
+    "preflight", "references", "memory", "reading-power",
+    "learn", "dashboard"
   ]
 }

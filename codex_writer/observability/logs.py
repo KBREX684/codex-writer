@@ -1,3 +1,8 @@
+"""Observability logging stubs.
+
+Note: For workflow logging, use `codex_writer.core.workflow.log_workflow()` instead.
+These functions are kept as reference stubs for API compatibility.
+"""
 from datetime import datetime, timezone
 from pathlib import Path
 

@@ -65,3 +65,58 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def list_backups(project_root: Path) -> list[dict]:
+    cw = project_root / ".codex-writer" / "backups"
+    if not cw.exists():
+        return []
+    backups = []
+    for backup_dir in sorted(cw.iterdir(), reverse=True):
+        manifest = backup_dir / "manifest.json"
+        if manifest.exists():
+            import json
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            backups.append({
+                "backup_id": data.get("backup_id", backup_dir.name),
+                "reason": data.get("reason", ""),
+                "created_at": data.get("created_at", ""),
+                "file_count": len(data.get("files", []))
+            })
+    return backups
+
+
+def verify_backup(project_root: Path, backup_id: str) -> dict:
+    cw = project_root / ".codex-writer" / "backups"
+    backup_dir = cw / backup_id
+    result = {"backup_id": backup_id, "exists": False, "files_ok": 0, "files_missing": 0, "sha256_mismatch": 0}
+
+    if not backup_dir.exists():
+        return result
+
+    result["exists"] = True
+    manifest_path = backup_dir / "manifest.json"
+    if not manifest_path.exists():
+        result["files_missing"] = -1
+        return result
+
+    import json
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    import hashlib
+
+    for file_entry in manifest.get("files", []):
+        fname = file_entry.get("path", "").replace(".codex-writer/", "")
+        fpath = backup_dir / fname
+        if not fpath.exists():
+            result["files_missing"] += 1
+            continue
+        h = hashlib.sha256()
+        with open(fpath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        if h.hexdigest() == file_entry.get("sha256", ""):
+            result["files_ok"] += 1
+        else:
+            result["sha256_mismatch"] += 1
+
+    return result

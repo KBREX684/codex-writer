@@ -9,6 +9,7 @@ from codex_writer.core.io import read_json, write_json_atomic
 from codex_writer.core.locks import project_write_lock
 from codex_writer.core.paths import resolve_in_project
 from codex_writer.core.security import redact_secret, sanitize_filename
+from codex_writer.cli import output_json
 
 
 def test_resolve_in_project_rejects_parent_escape(tmp_path):
@@ -31,6 +32,23 @@ def test_project_write_lock_creates_runtime_lock(tmp_path):
 def test_security_sanitizes_filename_and_redacts_secret():
     assert ".." not in sanitize_filename("../坏:name?.json")
     assert redact_secret("sk-1234567890") == "sk-***"
+
+
+def test_output_json_redacts_secret_fields(capsys):
+    output_json(
+        "test",
+        data={
+            "api_key": "sk-1234567890abcdef",
+            "nested": {"token": "tok_1234567890abcdef"},
+            "safe": "visible",
+        },
+    )
+    captured = capsys.readouterr().out
+    assert "sk-1234567890abcdef" not in captured
+    assert "tok_1234567890abcdef" not in captured
+    assert "sk-***" in captured
+    assert "tok***" in captured
+    assert "visible" in captured
 
 
 def test_load_settings_reads_codex_writer_env(monkeypatch):

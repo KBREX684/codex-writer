@@ -1,0 +1,65 @@
+# Codex Writer 架构概述
+
+## 真源划分
+
+Codex Writer 的数据分为四层：
+
+| 层 | 路径 | 用途 |
+|----|------|------|
+| 写前真源 | `.codex-writer/story/` | 故事合同、卷合同、章节任务书、反AI反馈 |
+| 写后真源 | `.codex-writer/commits/` | 每章的 accepted/rejected 提交 |
+| 投影读模型 | `.codex-writer/state.json` `memory.json` `summaries/` `index.sqlite` | 从 commit 派生的只读视图 |
+| 观测与审计 | `.codex-writer/logs/` `agents/运行记录/` | 运行时日志、Agent 调用记录 |
+
+## 主链流程
+
+```
+故事合同 → 章节任务书 → 正文草稿 → 章节审查 → 事实抽取 → 章节提交 → 投影读模型
+```
+
+1. **合同优先**：写作前先确定故事合同和章节任务书
+2. **提交优先**：写完不能直接改状态库，必须生成章节提交
+3. **模型可替换**：Codex 总编排，子Agent 路由决定具体执行者
+4. **先闭环再扩展**：一章可靠写完并沉淀事实，再做增强
+
+## 模块结构
+
+- `core/` — 路径、IO、锁、错误、配置、安全
+- `story/` — 合同、任务书、上下文、占位符扫描
+- `agents/` — 路由、Agent、provider、隐私
+- `review/` — 审查管线、反AI反馈
+- `extraction/` — 事实抽取、schema 校验
+- `commit/` — 章节提交、事件
+- `projections/` — state、summary、memory、index
+- `storage/` — SQLite、迁移、备份
+- `runtime/` — 运行时健康检查
+- `observability/` — 日志、用量统计
+
+- `memory/` — 长期记忆 scratchpad（双层：episodic + semantic）
+- `reading_power/` — 追读力追踪（debt + hook + cool-point）
+- `references/` — BM25/RAG 知识库检索
+- `query.py` — 人物、伏笔查询入口
+- `dashboard.py` — 只读观测面板
+- `schemas/` — JSON Schema 定义（6 个工件 schema）
+
+## 安全边界
+
+外部模型不能：
+- 直接修改 `.codex-writer/state.json`
+- 直接修改 `index.sqlite`
+- 直接写入 `commits/`
+- 跳过审查
+- 自行判定 accepted
+
+## 退出码
+
+| 码 | 含义 |
+|----|------|
+| 0 | 成功 |
+| 1 | 未分类错误 |
+| 2 | 参数/schema 错误 |
+| 3 | 审查/提交阻断 |
+| 4 | 隐私阻断 |
+| 5 | provider 失败 |
+| 6 | IO 失败 |
+| 7 | 迁移失败 |

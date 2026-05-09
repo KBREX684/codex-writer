@@ -2,11 +2,11 @@ import argparse
 import json
 import os
 import sys
-import uuid
+
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codex_writer.core.errors import CodexWriterError, PlaceholderFound, ChapterBriefMissing
+from codex_writer.core.errors import CodexWriterError
 from codex_writer.core.io import write_json_atomic, read_json
 from codex_writer.story.contracts import (
     create_story_contract,
@@ -24,14 +24,33 @@ from codex_writer.story.placeholders import scan_chapter_placeholders, scan_user
 def output_json(command: str, ok: bool = True, data: dict | None = None,
                 warnings: list | None = None, errors: list | None = None,
                 run_id: str = "", project_root: str = "") -> None:
+    from codex_writer.core.security import redact_secret
+    sensitive_keys = ("api_key", "apikey", "secret", "token", "password", "credential")
+
+    def _redact(obj, key: str = ""):
+        key_l = key.lower()
+        if any(k in key_l for k in sensitive_keys):
+            if isinstance(obj, str):
+                return redact_secret(obj)
+            if obj:
+                return "***"
+            return obj
+        if isinstance(obj, dict):
+            return {k: _redact(v, k) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_redact(i) for i in obj]
+        if isinstance(obj, str) and len(obj) > 20:
+            if any(kw in str(obj).lower() for kw in ("api_key", "secret", "token", "password", "credential")):
+                return redact_secret(obj)
+        return obj
     payload = {
         "ok": ok,
         "command": command,
         "project_root": project_root,
         "run_id": run_id,
-        "data": data or {},
-        "warnings": warnings or [],
-        "errors": errors or [],
+        "data": _redact(data or {}),
+        "warnings": _redact(warnings or []),
+        "errors": _redact(errors or []),
     }
     print(json.dumps(payload, ensure_ascii=False))
 
@@ -76,35 +95,27 @@ def cmd_init(args):
 
 
 def cmd_doctor(args):
-    project_root = Path(args.project_root).resolve()
-    errors = []
-    warnings = []
+    from pathlib import Path
+    from codex_writer.runtime.health import check_mainline_health
+    from codex_writer.story.placeholders import scan_chapter_placeholders, scan_user_files_placeholders
 
     if args.self_check:
         output_json("doctor", data={"self_check": True})
         return 0
 
-    cw = project_root / ".codex-writer"
-    if not cw.exists():
-        errors.append({"code": "PROJECT_NOT_INITIALIZED", "message": "项目未初始化", "blocking": True})
-        output_json("doctor", ok=False, project_root=str(project_root), errors=errors, warnings=warnings)
-        return 3
+    project_root = Path(args.project_root).resolve()
+    chapter = int(args.chapter) if args.chapter is not None else None
+    health = check_mainline_health(project_root, chapter)
+    errors = []
+    warnings = []
 
-    project_json = cw / "project.json"
-    if not project_json.exists():
-        errors.append({"code": "PROJECT_JSON_MISSING", "message": "project.json 缺失", "blocking": True})
+    if args.strict:
+        for w in health.get("warnings", []):
+            errors.append({**w, "blocking": True})
+    else:
+        warnings = health.get("warnings", [])
 
-    story_contract = cw / "story" / "故事合同.json"
-    if not story_contract.exists():
-        errors.append({"code": "STORY_CONTRACT_MISSING", "message": "故事合同缺失", "blocking": True})
-
-    if args.chapter is not None:
-        chapter = int(args.chapter)
-        brief = cw / "story" / "chapters" / f"第{chapter:04d}章任务书.json"
-        if not brief.exists():
-            errors.append({"code": "CHAPTER_BRIEF_MISSING", "message": f"第{chapter}章任务书缺失", "blocking": True})
-
-    migrations = cw / "migrations" / "applied.json"
+    migrations = project_root / ".codex-writer" / "migrations" / "applied.json"
     if args.strict:
         if not migrations.exists():
             errors.append({"code": "MIGRATION_MISSING", "message": "迁移记录缺失", "blocking": True})
@@ -118,8 +129,7 @@ def cmd_doctor(args):
 
     if args.strict:
         findings = scan_user_files_placeholders(project_root)
-        if args.chapter is not None:
-            chapter = int(args.chapter)
+        if chapter is not None:
             findings.extend(scan_chapter_placeholders(project_root, chapter))
         for f in findings:
             errors.append({
@@ -131,10 +141,10 @@ def cmd_doctor(args):
     if errors:
         exit_code = 3 if any(e.get("blocking", False) for e in errors) else 0
         output_json("doctor", ok=(exit_code == 0), project_root=str(project_root),
-                    errors=errors, warnings=warnings)
+                    data=health, errors=errors, warnings=warnings)
         return exit_code
 
-    output_json("doctor", project_root=str(project_root), warnings=warnings)
+    output_json("doctor", project_root=str(project_root), data=health, warnings=warnings)
     return 0
 
 
@@ -146,10 +156,11 @@ def cmd_plan(args):
         output_json("plan", ok=False, errors=[{"code": "INVALID_ARGUMENT", "message": f"chapter 必须为整数，收到: {args.chapter}", "blocking": True}])
         return 2
     from codex_writer.core.io import write_json_atomic
+    brief_title = args.title or f"第{chapter:04d}章"
     brief = {
         "meta": {"schema_version": "codex-writer/chapter-brief/v1"},
         "chapter": chapter,
-        "title": args.title or f"第{chapter:04d}章",
+        "title": brief_title,
         "goal": "",
         "must_cover_nodes": [],
         "forbidden_zones": [],
@@ -160,18 +171,46 @@ def cmd_plan(args):
         "ending_hook": "",
         "anti_ai_reminders": []
     }
+
+    suggestions = {}
+    try:
+        from codex_writer.references.search import search_references
+        hits = search_references(project_root, brief_title, top_k=5)
+        if hits:
+            style_hints = [h["snippet"][:100] for h in hits if "节奏" in h.get("snippet", "") or "爽点" in h.get("snippet", "")]
+            if style_hints:
+                brief["style_guidance"] = style_hints[:3]
+                suggestions["style_guidance"] = f"从 references 匹配到 {len(style_hints)} 条写作建议"
+            tech_hints = [h["snippet"][:80] for h in hits if "技法" in h.get("path", "") or "叙事" in h.get("snippet", "")]
+            if tech_hints:
+                brief["context_summary"] = f"建议关注：{'；'.join(tech_hints[:2])}"
+                suggestions["context_summary"] = f"从 references 匹配到 {len(tech_hints)} 条技法参考"
+    except ImportError:
+        pass
+
+    if args.dry_run:
+        output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "dry_run": True}, project_root=str(project_root))
+        return 0
+
     path = project_root / ".codex-writer" / "story" / "chapters" / f"第{chapter:04d}章任务书.json"
     write_json_atomic(path, brief)
-    output_json("plan", data={"chapter": chapter, "title": brief["title"]}, project_root=str(project_root))
+    output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions}, project_root=str(project_root))
     return 0
 
 
 def cmd_context(args):
-    from codex_writer.story.context import build_context_pack
+    from pathlib import Path
+    from codex_writer.story.context import write_context_pack
+    from codex_writer.memory.scratchpad import query_memory, get_active_loops
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter)
-    data = build_context_pack(project_root, chapter)
-    output_json("context", data=data, project_root=str(project_root))
+    path = write_context_pack(project_root, chapter)
+    import json
+    pack = json.loads(path.read_text(encoding="utf-8"))
+    loops = get_active_loops(project_root)
+    pack["open_loops"] = loops if loops else pack.get("open_loops", [])
+    pack["memory_count"] = len(query_memory(project_root))
+    output_json("context", data=pack, project_root=str(project_root))
     return 0
 
 
@@ -186,12 +225,9 @@ def cmd_write(args):
     from codex_writer.extraction.extractor import extract_from_chapter
     from codex_writer.commit.service import commit_chapter, mark_projection_done
     from codex_writer.commit.events import write_chapter_events, mirror_events_to_db
-    from codex_writer.projections.state import chapter_text_word_count, update_state_from_commit
-    from codex_writer.projections.summary import write_chapter_summary
-    from codex_writer.projections.memory import update_memory_from_events
-    from codex_writer.projections.index import update_index_from_commit
-    from codex_writer.core.io import append_jsonl
+    from codex_writer.projections.state import chapter_text_word_count
     from codex_writer.agents.agents import write_agent_run
+    from codex_writer.story.context import write_context_pack
 
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter)
@@ -216,6 +252,11 @@ def cmd_write(args):
         return 3
 
     log_workflow(project_root, run_id, chapter, "context_ready", "drafted", "draft_agent", "")
+    try:
+        from codex_writer.story.context import write_context_pack
+        write_context_pack(project_root, chapter)
+    except Exception:
+        warnings.append({"code": "CONTEXT_PACK_FAILED", "message": "写前资料包生成失败，继续执行"})
 
     brief = read_json(brief_path)
     title = brief.get("title", f"第{chapter:04d}章")
@@ -270,12 +311,14 @@ def cmd_write(args):
     if events_data:
         mirror_events_to_db(project_root, chapter, events_data)
 
-    update_state_from_commit(project_root, commit)
+    _apply_projections(project_root, chapter, commit, events_data)
 
     if commit["meta"]["status"] == "accepted":
-        write_chapter_summary(project_root, chapter, commit)
-        update_memory_from_events(project_root, chapter, events_data)
-        update_index_from_commit(project_root, chapter, commit)
+        from codex_writer.reading_power.tracker import detect_hooks_from_text, expire_old_debts, add_debt
+        hooks_found = detect_hooks_from_text(draft_text, chapter)
+        for hook in hooks_found:
+            add_debt(project_root, chapter, hook.get("snippet", hook.get("type", "")), debt_type=hook.get("type", "hook"))
+        expire_old_debts(project_root, chapter)
         commit = mark_projection_done(project_root, chapter, commit)
         log_workflow(project_root, run_id, chapter, "committed", "projected", "projections", "")
     else:
@@ -283,14 +326,6 @@ def cmd_write(args):
         errors.append({"code": "COMMIT_REJECTED", "message": "章节被拒绝", "blocking": True})
         output_json("write", ok=False, data=commit, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
         return 3
-
-    projections_log = project_root / ".codex-writer" / "logs" / "projections.jsonl"
-    append_jsonl(projections_log, {
-        "time": datetime.now(timezone.utc).isoformat(),
-        "chapter": chapter,
-        "status": commit["meta"]["status"],
-        "projections": commit.get("projection_status", {})
-    })
 
     output_json("write", data={
         "chapter": chapter,
@@ -338,13 +373,7 @@ def cmd_commit_cli(args):
     from pathlib import Path
     from codex_writer.commit.service import commit_chapter, mark_projection_done
     from codex_writer.commit.events import write_chapter_events, mirror_events_to_db
-    from codex_writer.projections.state import update_state_from_commit
-    from codex_writer.projections.summary import write_chapter_summary
-    from codex_writer.projections.memory import update_memory_from_events
-    from codex_writer.projections.index import update_index_from_commit
     from codex_writer.core.errors import CodexWriterError
-    from codex_writer.core.io import append_jsonl
-    from datetime import datetime, timezone
 
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter)
@@ -361,21 +390,10 @@ def cmd_commit_cli(args):
     if events:
         mirror_events_to_db(project_root, chapter, events)
 
-    update_state_from_commit(project_root, commit)
+    _apply_projections(project_root, chapter, commit, events)
 
     if commit["meta"]["status"] == "accepted":
-        write_chapter_summary(project_root, chapter, commit)
-        update_memory_from_events(project_root, chapter, events)
-        update_index_from_commit(project_root, chapter, commit)
         commit = mark_projection_done(project_root, chapter, commit)
-
-    log_path = project_root / ".codex-writer" / "logs" / "projections.jsonl"
-    append_jsonl(log_path, {
-        "time": datetime.now(timezone.utc).isoformat(),
-        "chapter": chapter,
-        "status": commit["meta"]["status"],
-        "projections": commit.get("projection_status", {})
-    })
 
     if commit["meta"]["status"] == "rejected":
         output_json("commit", ok=False, data=commit, project_root=str(project_root),
@@ -404,12 +422,26 @@ def cmd_query(args):
 def cmd_status(args):
     from pathlib import Path
     from codex_writer.core.io import read_json
-    from codex_writer.core.paths import state_path
+    from codex_writer.core.paths import state_path, memory_path, index_db_path
+    from codex_writer.runtime.rag import get_search_mode
     project_root = Path(args.project_root).resolve()
     sp = state_path(project_root)
+    data = {}
     if sp.exists():
         state = read_json(sp)
-        output_json("status", data=state, project_root=str(project_root))
+        data = {"state": state}
+        if hasattr(args, 'focus') and args.focus == 'all':
+            mem = memory_path(project_root)
+            if mem.exists():
+                data["memory"] = read_json(mem)
+            data["rag_mode"] = get_search_mode(project_root)
+        if hasattr(args, 'focus') and args.focus == 'memory':
+            mem = memory_path(project_root)
+            if mem.exists():
+                data["memory"] = read_json(mem)
+        if hasattr(args, 'focus') and args.focus == 'rag':
+            data["rag_mode"] = get_search_mode(project_root)
+        output_json("status", data=data, project_root=str(project_root))
     else:
         output_json("status", ok=False, project_root=str(project_root),
                     errors=[{"code": "STATE_MISSING", "message": "state.json 不存在", "blocking": False}])
@@ -431,7 +463,7 @@ def cmd_events(args):
                 data = json.loads(ef.read_text(encoding="utf-8"))
                 if isinstance(data, list):
                     total_file_events += len(data)
-            except Exception:
+            except json.JSONDecodeError:
                 pass
         db_path = project_root / ".codex-writer" / "index.sqlite"
         sqlite_count = 0
@@ -472,8 +504,16 @@ def cmd_migrate(args):
 
 def cmd_backup(args):
     from pathlib import Path
-    from codex_writer.storage.backup import create_backup_manifest
+    from codex_writer.storage.backup import create_backup_manifest, list_backups, verify_backup
     project_root = Path(args.project_root).resolve()
+    if hasattr(args, 'sub_command') and args.sub_command == 'list':
+        blist = list_backups(project_root)
+        output_json("backup", data={"backups": blist}, project_root=str(project_root))
+        return 0
+    if hasattr(args, 'sub_command') and args.sub_command == 'verify':
+        vresult = verify_backup(project_root, args.backup_id)
+        output_json("backup", data=vresult, project_root=str(project_root))
+        return 0
     manifest = create_backup_manifest(project_root, reason=args.reason)
     output_json("backup", data=manifest, project_root=str(project_root))
     return 0
@@ -501,48 +541,87 @@ def cmd_restore(args):
 def cmd_repair(args):
     from pathlib import Path
     from codex_writer.core.io import read_json, write_json_atomic
-    from codex_writer.commit.service import mark_projection_done
-    from codex_writer.projections.state import update_state_from_commit
-    from codex_writer.projections.summary import write_chapter_summary
-    from codex_writer.projections.memory import update_memory_from_events
     from codex_writer.projections.index import update_index_from_commit
     from codex_writer.core.paths import commit_path
     project_root = Path(args.project_root).resolve()
 
-    if args.sub == "projections" and args.chapter:
-        chapter = int(args.chapter)
-        cp = commit_path(project_root, chapter)
-        if cp.exists():
-            commit = read_json(cp)
-            update_state_from_commit(project_root, commit)
-            if commit["meta"]["status"] == "accepted":
-                write_chapter_summary(project_root, chapter, commit)
-                update_memory_from_events(project_root, chapter, commit.get("accepted_events", []))
-                update_index_from_commit(project_root, chapter, commit)
-                mark_projection_done(project_root, chapter, commit)
-            output_json("repair", data={"repaired": f"projections chapter {chapter}"}, project_root=str(project_root))
+    if args.sub == "projections":
+        if args.action_all:
+            commits_dir = project_root / ".codex-writer" / "commits"
+            if not commits_dir.exists():
+                output_json("repair", ok=False, project_root=str(project_root),
+                            errors=[{"code": "NO_COMMITS", "message": "commits 目录不存在"}])
+                return 3
+            repaired = 0
+            for cp in sorted(commits_dir.glob("*.json")):
+                ch_num = int(cp.stem.replace("第", "").replace("章提交", "").replace("提交", "").replace("第", ""))
+                try:
+                    ch_num = int(''.join(c for c in cp.stem if c.isdigit()))
+                except (ValueError, IndexError):
+                    continue
+                if ch_num == 0:
+                    continue
+                try:
+                    commit = read_json(cp)
+                    _apply_projections(project_root, ch_num, commit, commit.get("accepted_events", []))
+                    repaired += 1
+                except (OSError, ValueError, KeyError):
+                    pass
+            output_json("repair", data={"repaired": f"{repaired} chapters"}, project_root=str(project_root))
+            return 0
+        elif args.chapter:
+            chapter = int(args.chapter)
+            cp = commit_path(project_root, chapter)
+            if cp.exists():
+                commit = read_json(cp)
+                _apply_projections(project_root, chapter, commit, commit.get("accepted_events", []))
+                output_json("repair", data={"repaired": f"projections chapter {chapter}"}, project_root=str(project_root))
+            else:
+                output_json("repair", ok=False, project_root=str(project_root),
+                            errors=[{"code": "COMMIT_MISSING", "message": f"第{chapter}章提交缺失", "blocking": True}])
+                return 3
         else:
             output_json("repair", ok=False, project_root=str(project_root),
-                        errors=[{"code": "COMMIT_MISSING", "message": f"第{chapter}章提交缺失", "blocking": True}])
-            return 3
+                        errors=[{"code": "NEED_CHAPTER", "message": "Use: repair projections --chapter N or repair projections --all"}])
+            return 2
     elif args.sub == "index":
-        from codex_writer.storage.db import init_schema
-        init_schema(project_root)
-        output_json("repair", data={"repaired": "index"}, project_root=str(project_root))
+        if args.action_from_commits:
+            from codex_writer.storage.db import init_schema
+            init_schema(project_root)
+            commits_dir = project_root / ".codex-writer" / "commits"
+            count = 0
+            if commits_dir.exists():
+                for cp in sorted(commits_dir.glob("*.json")):
+                    try:
+                        commit = read_json(cp)
+                        chapter = commit["meta"]["chapter"]
+                        update_index_from_commit(project_root, chapter, commit)
+                        count += 1
+                    except (OSError, ValueError, KeyError):
+                        pass
+            output_json("repair", data={"repaired": f"index from {count} commits"}, project_root=str(project_root))
+        else:
+            from codex_writer.storage.db import init_schema
+            init_schema(project_root)
+            output_json("repair", data={"repaired": "index"}, project_root=str(project_root))
+        return 0
     elif args.sub == "logs":
         from codex_writer.storage.db import insert_agent_run
         run_dir = project_root / ".codex-writer" / "agents" / "运行记录"
         count = 0
         if run_dir.exists():
             for run_file in run_dir.glob("*.json"):
-                insert_agent_run(project_root, read_json(run_file))
-                count += 1
+                try:
+                    insert_agent_run(project_root, read_json(run_file))
+                    count += 1
+                except (OSError, ValueError, KeyError):
+                    pass
         output_json("repair", data={"agent_runs_rebuilt": count}, project_root=str(project_root))
+        return 0
     else:
         output_json("repair", ok=False, project_root=str(project_root),
                     errors=[{"code": "INVALID_SUB", "message": f"Unknown subcommand: {args.sub}", "blocking": True}])
         return 2
-    return 0
 
 
 def cmd_agents(args):
@@ -582,6 +661,19 @@ def cmd_route_test(args):
     output_json("route_test", data={"agent": args.agent, "route": route, "can_send_external": can_send},
                 project_root=str(project_root))
     return 0
+
+
+def cmd_preflight(args):
+    from pathlib import Path
+    from codex_writer.runtime.health import check_mainline_health, check_projection_health
+    project_root = Path(args.project_root).resolve()
+    chapter = int(args.chapter) if args.chapter is not None else None
+    health = check_mainline_health(project_root, chapter)
+    if chapter is not None:
+        proj_health = check_projection_health(project_root, chapter)
+        health["projection_details"] = proj_health
+    output_json("preflight", ok=health["mainline_ready"], data=health, project_root=str(project_root))
+    return 0 if health["mainline_ready"] else 3
 
 
 def cmd_run_agent(args):
@@ -630,10 +722,104 @@ def cmd_run_agent(args):
     return 0 if task["status"] == "completed" else 5
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(prog="codex-writer", description="Codex Writer MVP CLI")
-    subparsers = parser.add_subparsers(dest="command")
+def cmd_references(args):
+    from pathlib import Path
+    from codex_writer.references.search import search_references
+    project_root = Path(args.project_root).resolve()
+    if args.ref_command == "search":
+        results = search_references(project_root, args.query, top_k=args.top_k)
+        output_json("references", data={"query": args.query, "results": results}, project_root=str(project_root))
+        return 0
+    output_json("references", ok=False, project_root=str(project_root),
+                errors=[{"code": "INVALID_SUB", "message": "Use: references search --query <text>"}])
+    return 2
 
+
+def cmd_reading_power(args):
+    from pathlib import Path
+    from codex_writer.reading_power.tracker import get_open_debts, get_debt_summary
+    project_root = Path(args.project_root).resolve()
+    if args.rp_command == "debts":
+        debts = get_open_debts(project_root)
+        output_json("reading_power", data={"open_debts": debts}, project_root=str(project_root))
+        return 0
+    elif args.rp_command == "status":
+        summary = get_debt_summary(project_root)
+        output_json("reading_power", data=summary, project_root=str(project_root))
+        return 0
+    output_json("reading_power", data=get_debt_summary(project_root), project_root=str(project_root))
+    return 0
+
+
+def cmd_memory(args):
+    from pathlib import Path
+    from codex_writer.memory.scratchpad import bootstrap, query_memory, get_memory_stats
+    project_root = Path(args.project_root).resolve()
+    if args.mem_command == "stats":
+        stats = get_memory_stats(project_root)
+        output_json("memory", data=stats, project_root=str(project_root))
+        return 0
+    elif args.mem_command == "query":
+        results = query_memory(project_root, tag=args.tag)
+        output_json("memory", data={"count": len(results), "results": results[:20]}, project_root=str(project_root))
+        return 0
+    elif args.mem_command == "bootstrap":
+        data = bootstrap(project_root)
+        output_json("memory", data={"bootstrapped": True, "episodic": len(data.get("episodic", [])), "semantic": len(data.get("semantic", []))}, project_root=str(project_root))
+        return 0
+    output_json("memory", errors=[{"code": "INVALID_SUB", "message": "Use: memory stats|query|bootstrap"}])
+    return 2
+
+
+def cmd_learn(args):
+    from pathlib import Path
+    from codex_writer.memory.scratchpad import add_learn_entry
+    project_root = Path(args.project_root).resolve()
+    entry = add_learn_entry(project_root, args.content, tag=args.tag, chapter=args.chapter)
+    output_json("learn", data={"id": entry["id"], "tag": args.tag, "chapter": args.chapter}, project_root=str(project_root))
+    return 0
+
+
+def cmd_dashboard(args):
+    from pathlib import Path
+    from codex_writer.dashboard import build_dashboard, format_dashboard_text
+    project_root = Path(args.project_root).resolve()
+    data = build_dashboard(project_root)
+    if args.format == "json":
+        output_json("dashboard", data=data, project_root=str(project_root))
+    else:
+        print(format_dashboard_text(data))
+    return 0
+
+
+def _apply_projections(project_root, chapter, commit, events_data):
+    from codex_writer.commit.service import mark_projection_done
+    from codex_writer.projections.state import update_state_from_commit
+    from codex_writer.projections.summary import write_chapter_summary
+    from codex_writer.projections.memory import update_memory_from_events
+    from codex_writer.projections.index import update_index_from_commit
+    from codex_writer.memory.scratchpad import update_from_commit as update_scratchpad
+    from codex_writer.core.io import append_jsonl
+    from codex_writer.core.locks import project_write_lock
+    from datetime import datetime, timezone
+
+    with project_write_lock(project_root):
+        update_state_from_commit(project_root, commit)
+        if commit["meta"]["status"] == "accepted":
+            write_chapter_summary(project_root, chapter, commit)
+            update_memory_from_events(project_root, chapter, events_data)
+            update_index_from_commit(project_root, chapter, commit)
+            update_scratchpad(project_root, chapter, commit)
+            mark_projection_done(project_root, chapter, commit)
+        log_path = project_root / ".codex-writer" / "logs" / "projections.jsonl"
+        append_jsonl(log_path, {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "chapter": chapter,
+            "status": commit["meta"]["status"]
+        })
+
+
+def _register_subparsers(subparsers):
     sp_init = subparsers.add_parser("init", help="初始化书项目")
     sp_init.add_argument("--project-root", type=str, default=".")
     sp_init.add_argument("--title", type=str, default="")
@@ -651,6 +837,7 @@ def main(argv=None):
     sp_plan.add_argument("--project-root", type=str, default=".")
     sp_plan.add_argument("--chapter", type=str, default="1")
     sp_plan.add_argument("--title", type=str, default="")
+    sp_plan.add_argument("--dry-run", action="store_true")
     sp_plan.add_argument("--format", type=str, default="text")
 
     sp_context = subparsers.add_parser("context", help="输出写前资料包")
@@ -688,6 +875,7 @@ def main(argv=None):
 
     sp_status = subparsers.add_parser("status", help="查看当前进度和最近提交")
     sp_status.add_argument("--project-root", type=str, default=".")
+    sp_status.add_argument("--focus", type=str, default=None, choices=["memory", "rag", "all"])
     sp_status.add_argument("--format", type=str, default="text")
 
     sp_events = subparsers.add_parser("events", help="查询章节事件与事件链健康状态")
@@ -702,6 +890,14 @@ def main(argv=None):
 
     sp_backup = subparsers.add_parser("backup", help="创建项目级备份")
     sp_backup.add_argument("--project-root", type=str, default=".")
+    sub_backup = sp_backup.add_subparsers(dest="sub_command")
+    sp_backup_list = sub_backup.add_parser("list")
+    sp_backup_list.add_argument("--project-root", type=str, default=".")
+    sp_backup_list.add_argument("--format", type=str, default="text")
+    sp_backup_verify = sub_backup.add_parser("verify")
+    sp_backup_verify.add_argument("--project-root", type=str, default=".")
+    sp_backup_verify.add_argument("--backup-id", type=str, required=True)
+    sp_backup_verify.add_argument("--format", type=str, default="text")
     sp_backup.add_argument("--reason", type=str, default="手动备份")
     sp_backup.add_argument("--format", type=str, default="text")
 
@@ -714,6 +910,8 @@ def main(argv=None):
     sp_repair.add_argument("--project-root", type=str, default=".")
     sp_repair.add_argument("sub", choices=["projections", "index", "logs"])
     sp_repair.add_argument("--chapter", type=str, default=None)
+    sp_repair.add_argument("--all", action="store_true", dest="action_all")
+    sp_repair.add_argument("--from-commits", action="store_true", dest="action_from_commits")
     sp_repair.add_argument("--force", action="store_true")
     sp_repair.add_argument("--format", type=str, default="text")
 
@@ -734,6 +932,61 @@ def main(argv=None):
     sp_run_agent.add_argument("--provider", type=str, default=None)
     sp_run_agent.add_argument("--mock-output", type=str, default=None)
     sp_run_agent.add_argument("--format", type=str, default="text")
+
+    sp_preflight = subparsers.add_parser("preflight", help="运行时健康检查")
+    sp_preflight.add_argument("--project-root", type=str, default=".")
+    sp_preflight.add_argument("--chapter", type=str, default=None)
+    sp_preflight.add_argument("--format", type=str, default="text")
+
+    sp_references = subparsers.add_parser("references", help="检索 references 知识库")
+    sp_references.add_argument("--project-root", type=str, default=".")
+    sub_ref = sp_references.add_subparsers(dest="ref_command")
+    sp_ref_search = sub_ref.add_parser("search")
+    sp_ref_search.add_argument("--project-root", type=str, default=".")
+    sp_ref_search.add_argument("--query", type=str, required=True)
+    sp_ref_search.add_argument("--top-k", type=int, default=10)
+    sp_ref_search.add_argument("--format", type=str, default="text")
+
+    sp_memory = subparsers.add_parser("memory", help="管理长期记忆")
+    sp_memory.add_argument("--project-root", type=str, default=".")
+    sub_mem = sp_memory.add_subparsers(dest="mem_command")
+    sp_mem_stats = sub_mem.add_parser("stats")
+    sp_mem_stats.add_argument("--project-root", type=str, default=".")
+    sp_mem_stats.add_argument("--format", type=str, default="text")
+    sp_mem_query = sub_mem.add_parser("query")
+    sp_mem_query.add_argument("--project-root", type=str, default=".")
+    sp_mem_query.add_argument("--tag", type=str, default="")
+    sp_mem_query.add_argument("--format", type=str, default="text")
+    sp_mem_bootstrap = sub_mem.add_parser("bootstrap")
+    sp_mem_bootstrap.add_argument("--project-root", type=str, default=".")
+    sp_mem_bootstrap.add_argument("--format", type=str, default="text")
+
+    sp_rp = subparsers.add_parser("reading-power", help="追读力管理")
+    sp_rp.add_argument("--project-root", type=str, default=".")
+    sub_rp = sp_rp.add_subparsers(dest="rp_command")
+    sp_rp_debts = sub_rp.add_parser("debts")
+    sp_rp_debts.add_argument("--project-root", type=str, default=".")
+    sp_rp_debts.add_argument("--format", type=str, default="text")
+    sp_rp_status = sub_rp.add_parser("status")
+    sp_rp_status.add_argument("--project-root", type=str, default=".")
+    sp_rp_status.add_argument("--format", type=str, default="text")
+
+    sp_learn = subparsers.add_parser("learn", help="沉淀写作经验")
+    sp_learn.add_argument("--project-root", type=str, default=".")
+    sp_learn.add_argument("content", type=str, help="学习内容")
+    sp_learn.add_argument("--tag", type=str, default="")
+    sp_learn.add_argument("--chapter", type=int, default=0)
+    sp_learn.add_argument("--format", type=str, default="text")
+
+    sp_dashboard = subparsers.add_parser("dashboard", help="项目一站式观测面板")
+    sp_dashboard.add_argument("--project-root", type=str, default=".")
+    sp_dashboard.add_argument("--format", type=str, default="text")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="codex-writer", description="Codex Writer MVP CLI")
+    subparsers = parser.add_subparsers(dest="command")
+    _register_subparsers(subparsers)
 
     args = parser.parse_args(argv)
     if not args.command:
@@ -759,6 +1012,12 @@ def main(argv=None):
         "agents": cmd_agents,
         "route-test": cmd_route_test,
         "run-agent": cmd_run_agent,
+        "preflight": cmd_preflight,
+        "references": cmd_references,
+        "memory": cmd_memory,
+        "reading-power": cmd_reading_power,
+        "learn": cmd_learn,
+        "dashboard": cmd_dashboard,
     }
     try:
         return cmd_map[args.command](args)

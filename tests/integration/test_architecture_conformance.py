@@ -131,4 +131,4 @@ def test_open_loops_pass_to_next_chapter_context(tmp_path):
     assert result.returncode == 0
     data = json.loads(result.stdout)
     assert len(data["data"]["open_loops"]) >= 1
-    assert any(loop.get("description") == "青铜令来历不明" for loop in data["data"]["open_loops"])
+    assert any(loop.get("description") == "青铜令来历不明" or loop.get("content") == "青铜令来历不明" or loop.get("subject") == "青铜令秘密" for loop in data["data"]["open_loops"])

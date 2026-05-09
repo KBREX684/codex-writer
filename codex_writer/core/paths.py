@@ -4,8 +4,15 @@ from codex_writer.core.errors import PathOutsideProject
 
 
 def resolve_in_project(project_root: Path, relative_path: str) -> Path:
+    if '\x00' in relative_path:
+        raise PathOutsideProject("路径包含非法字符")
+    cleaned = relative_path
+    cleaned = cleaned.lstrip('\\/')
+    import re
+    cleaned = re.sub(r'^[A-Za-z]:', '', cleaned)
+    cleaned = cleaned.lstrip('\\/')
     root = project_root.expanduser().resolve()
-    target = (root / relative_path).resolve()
+    target = (root / cleaned).resolve()
     if root != target and root not in target.parents:
         raise PathOutsideProject(f"路径越界: {relative_path}")
     return target
@@ -82,3 +89,13 @@ def lock_path(project_root: Path) -> Path:
 
 def codex_writer_dir(project_root: Path) -> Path:
     return resolve_in_project(project_root, ".codex-writer")
+
+
+def references_dir_path(project_root: Path) -> Path:
+    ref_dir = project_root.parent / "references"
+    if not ref_dir.exists():
+        ref_dir = project_root.parent.parent / "references"
+    if not ref_dir.exists():
+        import codex_writer.references.search
+        ref_dir = Path(codex_writer.references.search.__file__).parent.parent.parent / "references"
+    return ref_dir

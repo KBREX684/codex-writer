@@ -45,3 +45,23 @@ def test_repair_logs_rebuilds_agent_runs(tmp_path):
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["agent_runs_rebuilt"] >= 1
+
+
+def test_preflight_reports_mainline_ready_after_write(tmp_path):
+    project = tmp_path / "book"
+    build_project(project)
+    result = run_cli("preflight", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["mainline_ready"] is True
+    assert payload["data"]["latest_commit_status"] == "accepted"
+    assert payload["data"]["projection_details"]["consistent"] is True
+
+
+def test_references_search_returns_results(tmp_path):
+    build_project(tmp_path / "book")
+    result = run_cli("references", "search", "--project-root", str(tmp_path / "book"), "--query", "爽点 节奏", "--format", "json")
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert len(payload["data"]["results"]) > 0
+    assert all("source" in r and "score" in r and "snippet" in r and "path" in r for r in payload["data"]["results"][:1])
