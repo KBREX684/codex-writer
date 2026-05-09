@@ -1,0 +1,10 @@
+{
+  "meta": {"schema_version": "codex-writer/story-contract/v1"},
+  "book": {"title": "测试书", "genre": "修仙"},
+  "core": {"one_sentence_pitch": "", "core_tone": "", "main_conflict": "", "reader_promise": []},
+  "hard_rules": [],
+  "world_rules": [],
+  "main_characters": [],
+  "style_rules": [],
+  "forbidden_patterns": []
+}

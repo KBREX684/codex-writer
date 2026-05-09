@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExtractionResult",
+  "type": "object",
+  "required": ["meta", "chapter", "accepted_events", "summary_text"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"type": "string", "const": "codex-writer/extraction-result/v1"}
+      }
+    },
+    "chapter": {"type": "integer"},
+    "covered_nodes": {"type": "array", "items": {"type": "string"}, "default": []},
+    "missed_nodes": {"type": "array", "items": {"type": "string"}, "default": []},
+    "pending_disambiguation": {"type": "array", "items": {"type": "object"}, "default": []},
+    "state_deltas": {"type": "array", "items": {"type": "object"}, "default": []},
+    "entity_deltas": {"type": "array", "items": {"type": "object"}, "default": []},
+    "accepted_events": {"type": "array", "items": {"type": "object"}},
+    "scenes": {"type": "array", "items": {"type": "object"}, "default": []},
+    "summary_text": {"type": "string"},
+    "dominant_thread": {"type": "string", "default": ""}
+  }
+}

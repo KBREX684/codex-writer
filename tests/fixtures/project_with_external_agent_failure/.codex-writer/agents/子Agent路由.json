@@ -1,0 +1,7 @@
+{
+  "schema_version": "codex-writer/router/v1",
+  "default_provider": "codex",
+  "routes": {
+    "draft_agent": {"provider": "openai_compatible", "model": "writer-large"}
+  }
+}

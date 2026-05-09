@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewResult",
+  "type": "object",
+  "required": ["meta", "chapter", "issues", "summary", "blocking_count"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"type": "string", "const": "codex-writer/review-result/v1"}
+      }
+    },
+    "chapter": {"type": "integer"},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "location", "description", "evidence", "fix_hint", "blocking"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+          "category": {"type": "string", "enum": ["setting", "timeline", "continuity", "character", "logic", "ai_flavor"]},
+          "location": {"type": "string"},
+          "description": {"type": "string"},
+          "evidence": {"type": "string"},
+          "fix_hint": {"type": "string"},
+          "blocking": {"type": "boolean"}
+        }
+      }
+    },
+    "summary": {"type": "string"},
+    "blocking_count": {"type": "integer"}
+  }
+}

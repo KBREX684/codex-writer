@@ -1,0 +1,14 @@
+{
+  "meta": {"schema_version": "codex-writer/chapter-brief/v1"},
+  "chapter": 1,
+  "title": "入局",
+  "goal": "",
+  "must_cover_nodes": [],
+  "forbidden_zones": [],
+  "key_entities": [],
+  "context_summary": "",
+  "character_motivation": [],
+  "style_guidance": [],
+  "ending_hook": "",
+  "anti_ai_reminders": []
+}

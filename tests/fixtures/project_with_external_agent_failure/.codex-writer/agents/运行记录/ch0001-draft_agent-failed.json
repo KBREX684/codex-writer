@@ -1,0 +1,13 @@
+{
+  "task_id": "ch0001-draft_agent-failed",
+  "run_id": "run_test",
+  "chapter": 1,
+  "agent": "draft_agent",
+  "provider": "openai_compatible",
+  "model": "writer-large",
+  "status": "failed",
+  "input_refs": [],
+  "output_ref": "",
+  "usage": {},
+  "errors": [{"code": "PROVIDER_FAILURE", "message": "Connection timeout"}]
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChapterBrief",
+  "type": "object",
+  "required": ["meta", "chapter", "title"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"type": "string", "const": "codex-writer/chapter-brief/v1"}
+      }
+    },
+    "chapter": {"type": "integer"},
+    "title": {"type": "string"},
+    "goal": {"type": "string", "default": ""},
+    "must_cover_nodes": {"type": "array", "items": {"type": "string"}, "default": []},
+    "forbidden_zones": {"type": "array", "items": {"type": "string"}, "default": []},
+    "key_entities": {"type": "array", "items": {"type": "string"}, "default": []},
+    "context_summary": {"type": "string", "default": ""},
+    "character_motivation": {"type": "array", "items": {"type": "string"}, "default": []},
+    "style_guidance": {"type": "array", "items": {"type": "string"}, "default": []},
+    "ending_hook": {"type": "string", "default": ""},
+    "anti_ai_reminders": {"type": "array", "items": {"type": "string"}, "default": []}
+  }
+}

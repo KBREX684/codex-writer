@@ -1,0 +1,17 @@
+{
+  "meta": {"schema_version": "codex-writer/review-result/v1"},
+  "chapter": 1,
+  "issues": [
+    {
+      "severity": "critical",
+      "category": "logic",
+      "location": "全文",
+      "description": "正文为空",
+      "evidence": "",
+      "fix_hint": "补写正文后重新审查",
+      "blocking": true
+    }
+  ],
+  "summary": "正文为空",
+  "blocking_count": 1
+}

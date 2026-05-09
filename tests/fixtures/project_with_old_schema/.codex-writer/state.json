@@ -1,0 +1,8 @@
+{
+  "meta": {"schema_version": "codex-writer/state/v1"},
+  "total_word_count": 0,
+  "current_chapter": 0,
+  "current_volume": 1,
+  "chapters": {},
+  "story_status": "planning"
+}

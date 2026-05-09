@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChapterCommit",
+  "type": "object",
+  "required": ["meta", "refs", "checks", "accepted_events", "summary_text"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version", "chapter", "status"],
+      "properties": {
+        "schema_version": {"type": "string", "const": "codex-writer/chapter-commit/v1"},
+        "chapter": {"type": "integer"},
+        "status": {"type": "string", "enum": ["accepted", "rejected"]}
+      }
+    },
+    "refs": {
+      "type": "object",
+      "properties": {
+        "story_contract": {"type": "string"},
+        "chapter_brief": {"type": "string"},
+        "review_result": {"type": "string"},
+        "extraction_result": {"type": "string"}
+      }
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "blocking_count": {"type": "integer"},
+        "missed_nodes": {"type": "array", "items": {"type": "string"}},
+        "pending_disambiguation": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "accepted_events": {"type": "array", "items": {"type": "object"}},
+    "state_deltas": {"type": "array", "items": {"type": "object"}, "default": []},
+    "entity_deltas": {"type": "array", "items": {"type": "object"}, "default": []},
+    "summary_text": {"type": "string"},
+    "projection_status": {
+      "type": "object",
+      "properties": {
+        "state": {"type": "string", "default": "pending"},
+        "summary": {"type": "string", "default": "pending"},
+        "memory": {"type": "string", "default": "pending"},
+        "index": {"type": "string", "default": "pending"}
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StoryContract",
+  "type": "object",
+  "required": ["meta", "book", "core"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"type": "string", "const": "codex-writer/story-contract/v1"}
+      }
+    },
+    "book": {
+      "type": "object",
+      "required": ["title", "genre"],
+      "properties": {
+        "title": {"type": "string"},
+        "genre": {"type": "string"},
+        "target_platform": {"type": "string", "default": ""},
+        "target_length": {"type": "string", "default": ""}
+      }
+    },
+    "core": {
+      "type": "object",
+      "properties": {
+        "one_sentence_pitch": {"type": "string", "default": ""},
+        "core_tone": {"type": "string", "default": ""},
+        "main_conflict": {"type": "string", "default": ""},
+        "reader_promise": {"type": "array", "items": {"type": "string"}, "default": []}
+      }
+    },
+    "hard_rules": {"type": "array", "items": {"type": "string"}, "default": []},
+    "world_rules": {"type": "array", "items": {"type": "string"}, "default": []},
+    "main_characters": {"type": "array", "items": {"type": "object"}, "default": []},
+    "style_rules": {"type": "array", "items": {"type": "string"}, "default": []},
+    "forbidden_patterns": {"type": "array", "items": {"type": "string"}, "default": []}
+  }
+}

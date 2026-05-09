@@ -1,0 +1,13 @@
+{
+  "meta": {"schema_version": "codex-writer/extraction-result/v1"},
+  "chapter": 1,
+  "covered_nodes": [],
+  "missed_nodes": [],
+  "pending_disambiguation": [],
+  "state_deltas": [],
+  "entity_deltas": [],
+  "accepted_events": [],
+  "scenes": [],
+  "summary_text": "",
+  "dominant_thread": ""
+}

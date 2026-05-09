@@ -1,0 +1,7 @@
+{
+  "meta": {"schema_version": "codex-writer/memory/v1"},
+  "open_loops": [],
+  "reader_promises": [],
+  "world_rules": [],
+  "long_term_facts": []
+}

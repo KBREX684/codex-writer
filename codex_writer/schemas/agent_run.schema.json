@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentRun",
+  "type": "object",
+  "required": ["task_id", "agent", "provider", "model", "status"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "chapter": {"type": "integer"},
+    "agent": {"type": "string"},
+    "provider": {"type": "string"},
+    "model": {"type": "string"},
+    "status": {"type": "string", "enum": ["running", "completed", "failed"]},
+    "input_refs": {"type": "array", "items": {"type": "string"}, "default": []},
+    "output_ref": {"type": "string", "default": ""},
+    "usage": {"type": "object", "default": {}},
+    "errors": {"type": "array", "items": {"type": "object"}, "default": []}
+  }
+}
