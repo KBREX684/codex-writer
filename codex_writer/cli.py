@@ -782,11 +782,14 @@ def cmd_learn(args):
 
 def cmd_dashboard(args):
     from pathlib import Path
-    from codex_writer.dashboard import build_dashboard, format_dashboard_text
+    from codex_writer.dashboard import build_dashboard, format_dashboard_text, write_dashboard_html
     project_root = Path(args.project_root).resolve()
     data = build_dashboard(project_root)
     if args.format == "json":
         output_json("dashboard", data=data, project_root=str(project_root))
+    elif args.format == "html":
+        output_path = write_dashboard_html(project_root, data, output=args.output)
+        print(f"Dashboard HTML: {output_path}")
     else:
         print(format_dashboard_text(data))
     return 0
@@ -981,6 +984,7 @@ def _register_subparsers(subparsers):
     sp_dashboard = subparsers.add_parser("dashboard", help="项目一站式观测面板")
     sp_dashboard.add_argument("--project-root", type=str, default=".")
     sp_dashboard.add_argument("--format", type=str, default="text")
+    sp_dashboard.add_argument("--output", type=str, default=None)
 
 
 def main(argv=None):

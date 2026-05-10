@@ -26,6 +26,13 @@ codex-writer write --project-root "./我的小说" --chapter 1
 | `status` | 查看当前进度 |
 | `events` | 查询章节事件与健康状态 |
 | `preflight` | 运行时健康检查 |
+| `dashboard` | 生成只读观测面板，支持 text/json/html |
+
+生成高保真本地面板：
+
+```bash
+codex-writer dashboard --project-root "./我的小说" --format html
+```
 
 ## 架构
 

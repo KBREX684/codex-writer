@@ -1,7 +1,19 @@
 {
   "name": "codex-writer",
   "version": "0.5.0",
-  "description": "中文长篇网文写作插件",
+  "description": "中文长篇网文写作插件与本地 CLI 运行时",
+  "author": {
+    "name": "Codex Writer Project"
+  },
+  "license": "MIT",
+  "keywords": [
+    "writing",
+    "webnovel",
+    "chinese-fiction",
+    "codex",
+    "skills"
+  ],
+  "skills": "./skills/",
   "entry": "scripts/codex_writer.py",
   "commands": [
     "init", "doctor", "plan", "context", "write", "review",
@@ -10,5 +22,20 @@
     "agents", "route-test", "run-agent",
     "preflight", "references", "memory", "reading-power",
     "learn", "dashboard"
-  ]
+  ],
+  "interface": {
+    "displayName": "Codex Writer",
+    "shortDescription": "中文长篇网文创作工作流、审查、投影与观测面板",
+    "longDescription": "Codex Writer 提供面向中文长篇网文作者的本地写作运行时，包括故事合同、章节任务书、写章流程、结构化审查、事实抽取、章节提交、投影读模型、记忆、追读力和只读 dashboard。",
+    "developerName": "Codex Writer Project",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "用 Codex Writer 初始化或继续一个中文长篇网文项目",
+    "brandColor": "#0B0C0F",
+    "screenshots": []
+  }
 }

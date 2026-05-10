@@ -239,7 +239,12 @@ codex-writer status --project-root <path> --focus memory|rag
 ## dashboard
 
 ```bash
-codex-writer dashboard --project-root <path> [--format json|text]
+codex-writer dashboard --project-root <path> [--format json|text|html]
+codex-writer dashboard --project-root <path> --format html [--output exports/dashboard.html]
 ```
 
-一站式观测面板。整合项目概况、章节网格、审查摘要、记忆统计、追读力仪表、实体概览六面板。
+一站式只读观测面板。整合项目概况、章节网格、审查摘要、记忆统计、追读力仪表、实体概览六面板。
+
+- `json`：稳定机器输出，供自动化或未来前端读取。
+- `text`：终端可读输出。
+- `html`：生成 Codex 风格高保真本地页面。默认写入 `.codex-writer/dashboard/index.html`，可通过 `--output` 指定项目内相对路径。
