@@ -1,6 +1,6 @@
 # Codex Writer 命令详解
 
-所有命令统一支持 `--project-root <path>` 和 `--format json`。JSON 输出格式为：
+项目型命令支持 `--project-root <path>`，命令统一支持 `--format json` 或保持兼容的 JSON 输出。JSON 输出格式为：
 
 ```json
 {"ok": true, "command": "write", "project_root": "", "run_id": "", "data": {}, "warnings": [], "errors": []}
@@ -37,6 +37,19 @@ codex-writer init --project-root <path> --title <title> --genre <genre>
 
 ---
 
+## use / where / resume
+
+```bash
+codex-writer use --project-root <path>
+codex-writer where
+codex-writer resume
+codex-writer resume --project-root <path>
+```
+
+工作区恢复命令。`use` 将项目绑定为当前活跃项目，状态写入 `CODEX_WRITER_HOME/workspace.json` 或用户目录下的 `.codex-writer/workspace.json`。`where` 查看当前绑定项目。`resume` 根据投影状态给出下一章编号和建议命令。
+
+---
+
 ## doctor
 
 ```bash
@@ -65,6 +78,8 @@ codex-writer plan --project-root <path> --chapter N --title <title>
 ```
 
 生成或更新章节任务书（`.codex-writer/story/chapters/第NNNN章任务书.json`）。
+
+如果项目 `genre` 命中内置题材模板，`plan` 会自动把题材风格约束和审查重点写入章节任务书。
 
 ---
 
@@ -171,15 +186,29 @@ codex-writer references search --project-root <path> --query <text>
 
 ---
 
+## genres
+
+```bash
+codex-writer genres list
+codex-writer genres show --genre 玄幻
+```
+
+查看中文网文题材模板。v0.6 内置玄幻、都市脑洞、规则怪谈、狗血言情、古言、现实题材 6 个模板。模板只提供章节规划、审查重点和路由提示，不会绕过写作主链。
+
+---
+
 ## memory
 
 ```bash
 codex-writer memory stats --project-root <path>
 codex-writer memory query --project-root <path> --tag <tag>
 codex-writer memory bootstrap --project-root <path>
+codex-writer memory dump --project-root <path>
+codex-writer memory conflicts --project-root <path>
+codex-writer memory update --project-root <path> --id <entry-id> --status archived
 ```
 
-管理长期记忆 scratchpad。`stats` 查看记忆统计。`query` 按标签检索记忆条目。`bootstrap` 从旧 `memory.json` 迁移数据。
+管理长期记忆 scratchpad。`stats` 查看记忆统计。`query` 按标签检索记忆条目。`bootstrap` 从旧 `memory.json` 迁移数据。`dump` 导出完整 scratchpad。`conflicts` 检测同一实体同一字段的语义事实冲突。`update` 修改单条记忆状态、内容或标签。
 
 ---
 
@@ -243,7 +272,7 @@ codex-writer dashboard --project-root <path> [--format json|text|html]
 codex-writer dashboard --project-root <path> --format html [--output exports/dashboard.html]
 ```
 
-一站式只读观测面板。整合项目概况、章节网格、审查摘要、记忆统计、追读力仪表、实体概览六面板。
+一站式只读观测面板。整合项目概况、章节网格、审查摘要、记忆统计、追读力仪表、事件链、开放伏笔、实体与关系投影。
 
 - `json`：稳定机器输出，供自动化或未来前端读取。
 - `text`：终端可读输出。

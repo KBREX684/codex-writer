@@ -4,6 +4,7 @@
 
 - [命令详解](guides/commands.md) — 所有 CLI 命令的完整说明
 - [运维指南](operations/operations.md) — backup、restore、repair、preflight
+- [v0.6 发布说明](releases/v0.6.md) — 上线前补齐能力与验收重点
 
 ## 开发文档
 

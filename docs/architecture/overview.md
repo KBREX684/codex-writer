@@ -10,6 +10,7 @@ Codex Writer 的数据分为四层：
 | 写后真源 | `.codex-writer/commits/` | 每章的 accepted/rejected 提交 |
 | 投影读模型 | `.codex-writer/state.json` `memory.json` `summaries/` `index.sqlite` | 从 commit 派生的只读视图 |
 | 观测与审计 | `.codex-writer/logs/` `agents/运行记录/` | 运行时日志、Agent 调用记录 |
+| 工作区绑定 | `CODEX_WRITER_HOME/workspace.json` 或用户目录 `.codex-writer/workspace.json` | 记录当前活跃写作项目和最近项目 |
 
 ## 主链流程
 
@@ -36,10 +37,12 @@ Codex Writer 的数据分为四层：
 - `observability/` — 日志、用量统计
 
 - `memory/` — 长期记忆 scratchpad（双层：episodic + semantic）
+- `genres/` — 中文网文题材模板与章节规划增强
+- `workspace.py` — 当前项目绑定、恢复和续写建议
 - `reading_power/` — 追读力追踪（debt + hook + cool-point）
 - `references/` — BM25/RAG 知识库检索
 - `query.py` — 人物、伏笔查询入口
-- `dashboard.py` — 只读观测面板
+- `dashboard.py` — 只读观测面板（章节、审查、记忆、追读力、事件链、伏笔、实体关系）
 - `schemas/` — JSON Schema 定义（6 个工件 schema）
 
 ## 安全边界

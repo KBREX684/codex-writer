@@ -86,6 +86,14 @@ def cmd_init(args):
         write_json_atomic(cw / "agents" / "子Agent路由.json", create_agent_router_json())
         write_json_atomic(cw / "agents" / "模型供应商.example.json", create_provider_example_json())
         write_json_atomic(cw / "migrations" / "applied.json", [])
+        try:
+            from codex_writer.genres.templates import match_genre_template
+
+            template = match_genre_template(args.genre)
+            if template:
+                write_json_atomic(cw / "story" / "题材模板.json", template)
+        except ImportError:
+            pass
 
         output_json("init", data={"project_root": str(project_root), "title": args.title})
         return 0
@@ -173,6 +181,20 @@ def cmd_plan(args):
     }
 
     suggestions = {}
+    try:
+        from codex_writer.core.paths import project_json_path
+        from codex_writer.genres.templates import apply_template_to_brief, match_genre_template
+
+        pj = project_json_path(project_root)
+        if pj.exists():
+            project_data = read_json(pj)
+            template = match_genre_template(project_data.get("genre", ""))
+            if template:
+                brief = apply_template_to_brief(brief, template)
+                suggestions["genre_template"] = template["name"]
+    except (ImportError, OSError, ValueError, KeyError):
+        pass
+
     try:
         from codex_writer.references.search import search_references
         hits = search_references(project_root, brief_title, top_k=5)
@@ -753,7 +775,14 @@ def cmd_reading_power(args):
 
 def cmd_memory(args):
     from pathlib import Path
-    from codex_writer.memory.scratchpad import bootstrap, query_memory, get_memory_stats
+    from codex_writer.memory.scratchpad import (
+        bootstrap,
+        detect_conflicts,
+        dump_memory,
+        get_memory_stats,
+        query_memory,
+        update_memory_entry,
+    )
     project_root = Path(args.project_root).resolve()
     if args.mem_command == "stats":
         stats = get_memory_stats(project_root)
@@ -767,7 +796,32 @@ def cmd_memory(args):
         data = bootstrap(project_root)
         output_json("memory", data={"bootstrapped": True, "episodic": len(data.get("episodic", [])), "semantic": len(data.get("semantic", []))}, project_root=str(project_root))
         return 0
-    output_json("memory", errors=[{"code": "INVALID_SUB", "message": "Use: memory stats|query|bootstrap"}])
+    elif args.mem_command == "dump":
+        output_json("memory", data=dump_memory(project_root), project_root=str(project_root))
+        return 0
+    elif args.mem_command == "conflicts":
+        conflicts = detect_conflicts(project_root)
+        output_json("memory", data={"count": len(conflicts), "results": conflicts}, project_root=str(project_root))
+        return 0
+    elif args.mem_command == "update":
+        entry = update_memory_entry(
+            project_root,
+            args.id,
+            status=args.status,
+            content=args.content,
+            tag=args.tag,
+        )
+        if entry is None:
+            output_json(
+                "memory",
+                ok=False,
+                project_root=str(project_root),
+                errors=[{"code": "MEMORY_ENTRY_NOT_FOUND", "message": f"未找到记忆条目: {args.id}", "blocking": False}],
+            )
+            return 2
+        output_json("memory", data={"entry": entry}, project_root=str(project_root))
+        return 0
+    output_json("memory", errors=[{"code": "INVALID_SUB", "message": "Use: memory stats|query|bootstrap|dump|conflicts|update"}])
     return 2
 
 
@@ -792,6 +846,62 @@ def cmd_dashboard(args):
         print(f"Dashboard HTML: {output_path}")
     else:
         print(format_dashboard_text(data))
+    return 0
+
+
+def cmd_genres(args):
+    from codex_writer.genres.templates import get_genre_template, list_genre_templates
+
+    if args.genre_command == "list":
+        templates = list_genre_templates()
+        output_json("genres", data={"count": len(templates), "templates": templates})
+        return 0
+    if args.genre_command == "show":
+        try:
+            template = get_genre_template(args.genre)
+        except KeyError:
+            output_json(
+                "genres",
+                ok=False,
+                errors=[{"code": "GENRE_TEMPLATE_NOT_FOUND", "message": f"未找到题材模板: {args.genre}", "blocking": False}],
+            )
+            return 2
+        output_json("genres", data={"template": template})
+        return 0
+    output_json("genres", ok=False, errors=[{"code": "INVALID_SUB", "message": "Use: genres list|show"}])
+    return 2
+
+
+def cmd_use(args):
+    from pathlib import Path
+    from codex_writer.workspace import bind_active_project
+
+    data = bind_active_project(Path(args.project_root))
+    if not data.get("ok"):
+        output_json("use", ok=False, data=data, errors=[data.get("error", {})])
+        return 3
+    output_json("use", data=data, project_root=data.get("active_project_root", ""))
+    return 0
+
+
+def cmd_where(args):
+    from codex_writer.workspace import current_workspace
+
+    data = current_workspace()
+    output_json("where", ok=bool(data.get("active_project_root")), data=data, project_root=data.get("active_project_root", ""))
+    return 0 if data.get("active_project_root") else 3
+
+
+def cmd_resume(args):
+    from pathlib import Path
+    from codex_writer.workspace import resume_plan
+
+    root = Path(args.project_root) if args.project_root else None
+    data = resume_plan(root)
+    if not data.get("ok"):
+        output_json("resume", ok=False, data=data, errors=[data.get("error", {})])
+        return 3
+    output_json("resume", data=data, project_root=data.get("active_project_root", ""))
     return 0
 
 
@@ -828,6 +938,17 @@ def _register_subparsers(subparsers):
     sp_init.add_argument("--title", type=str, default="")
     sp_init.add_argument("--genre", type=str, default="")
     sp_init.add_argument("--format", type=str, default="text")
+
+    sp_use = subparsers.add_parser("use", help="绑定当前活跃写作项目")
+    sp_use.add_argument("--project-root", type=str, required=True)
+    sp_use.add_argument("--format", type=str, default="text")
+
+    sp_where = subparsers.add_parser("where", help="查看当前活跃写作项目")
+    sp_where.add_argument("--format", type=str, default="text")
+
+    sp_resume = subparsers.add_parser("resume", help="恢复当前写作上下文并给出下一步")
+    sp_resume.add_argument("--project-root", type=str, default="")
+    sp_resume.add_argument("--format", type=str, default="text")
 
     sp_doctor = subparsers.add_parser("doctor", help="检查项目结构与依赖")
     sp_doctor.add_argument("--project-root", type=str, default=".")
@@ -941,6 +1062,15 @@ def _register_subparsers(subparsers):
     sp_preflight.add_argument("--chapter", type=str, default=None)
     sp_preflight.add_argument("--format", type=str, default="text")
 
+    sp_genres = subparsers.add_parser("genres", help="查看和应用中文网文题材模板")
+    sp_genres.add_argument("--format", type=str, default="text")
+    sub_genres = sp_genres.add_subparsers(dest="genre_command")
+    sp_genres_list = sub_genres.add_parser("list")
+    sp_genres_list.add_argument("--format", type=str, default="text")
+    sp_genres_show = sub_genres.add_parser("show")
+    sp_genres_show.add_argument("--genre", type=str, required=True)
+    sp_genres_show.add_argument("--format", type=str, default="text")
+
     sp_references = subparsers.add_parser("references", help="检索 references 知识库")
     sp_references.add_argument("--project-root", type=str, default=".")
     sub_ref = sp_references.add_subparsers(dest="ref_command")
@@ -963,6 +1093,19 @@ def _register_subparsers(subparsers):
     sp_mem_bootstrap = sub_mem.add_parser("bootstrap")
     sp_mem_bootstrap.add_argument("--project-root", type=str, default=".")
     sp_mem_bootstrap.add_argument("--format", type=str, default="text")
+    sp_mem_dump = sub_mem.add_parser("dump")
+    sp_mem_dump.add_argument("--project-root", type=str, default=".")
+    sp_mem_dump.add_argument("--format", type=str, default="text")
+    sp_mem_conflicts = sub_mem.add_parser("conflicts")
+    sp_mem_conflicts.add_argument("--project-root", type=str, default=".")
+    sp_mem_conflicts.add_argument("--format", type=str, default="text")
+    sp_mem_update = sub_mem.add_parser("update")
+    sp_mem_update.add_argument("--project-root", type=str, default=".")
+    sp_mem_update.add_argument("--id", type=str, required=True)
+    sp_mem_update.add_argument("--status", type=str, default=None, choices=["active", "archived", "outdated", "contradicted", "tentative", "open", "resolved"])
+    sp_mem_update.add_argument("--content", type=str, default=None)
+    sp_mem_update.add_argument("--tag", type=str, default=None)
+    sp_mem_update.add_argument("--format", type=str, default="text")
 
     sp_rp = subparsers.add_parser("reading-power", help="追读力管理")
     sp_rp.add_argument("--project-root", type=str, default=".")
@@ -999,6 +1142,9 @@ def main(argv=None):
 
     cmd_map = {
         "init": cmd_init,
+        "use": cmd_use,
+        "where": cmd_where,
+        "resume": cmd_resume,
         "doctor": cmd_doctor,
         "plan": cmd_plan,
         "context": cmd_context,
@@ -1017,6 +1163,7 @@ def main(argv=None):
         "route-test": cmd_route_test,
         "run-agent": cmd_run_agent,
         "preflight": cmd_preflight,
+        "genres": cmd_genres,
         "references": cmd_references,
         "memory": cmd_memory,
         "reading-power": cmd_reading_power,

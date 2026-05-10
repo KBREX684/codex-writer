@@ -25,6 +25,9 @@ def test_dashboard_json_output(tmp_path):
     assert "chapters" in data["data"]
     assert len(data["data"]["chapters"]) >= 1
     assert data["data"]["chapters"][0]["status"] == "accepted"
+    assert data["data"]["event_chain"]["total_events"] >= 1
+    assert "foreshadowing" in data["data"]
+    assert "entity_graph" in data["data"]
 
 
 def test_dashboard_text_output_is_readable_chinese(tmp_path):
@@ -48,6 +51,8 @@ def test_dashboard_html_output(tmp_path):
     assert "Codex Writer" in html
     assert "测试书" in html
     assert "最近章节网格" in html
+    assert "事件链" in html
+    assert "伏笔" in html
     assert "只读面板" in html
 
 

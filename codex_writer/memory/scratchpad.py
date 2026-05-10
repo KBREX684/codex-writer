@@ -140,6 +140,74 @@ def query_memory(project_root: Path, query_type: str = "all", tag: str = "") -> 
     return results
 
 
+def dump_memory(project_root: Path) -> dict:
+    return _load(project_root)
+
+
+def detect_conflicts(project_root: Path) -> list:
+    scratch = _load(project_root)
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for item in scratch.get("semantic", []):
+        if item.get("status", "active") in ("archived", "outdated"):
+            continue
+        entity = str(item.get("entity", "")).strip()
+        field = str(item.get("field", "")).strip()
+        value = str(item.get("value", "")).strip()
+        if not entity or not field or not value:
+            continue
+        grouped.setdefault((entity, field), []).append(item)
+
+    conflicts = []
+    for (entity, field), items in sorted(grouped.items()):
+        values = {str(item.get("value", "")).strip() for item in items}
+        if len(values) <= 1:
+            continue
+        conflicts.append({
+            "id": f"conflict-{entity}-{field}",
+            "entity": entity,
+            "field": field,
+            "values": sorted(values),
+            "entry_ids": [item.get("id", "") for item in items],
+            "chapters": [item.get("chapter", item.get("source_chapter", 0)) for item in items],
+            "status": "open",
+        })
+
+    scratch["conflicts"] = conflicts
+    scratch.setdefault("meta", {})["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save(project_root, scratch)
+    return conflicts
+
+
+def update_memory_entry(
+    project_root: Path,
+    entry_id: str,
+    *,
+    status: str | None = None,
+    content: str | None = None,
+    tag: str | None = None,
+) -> dict | None:
+    scratch = _load(project_root)
+    for bucket in ("episodic", "semantic", "conflicts"):
+        for item in scratch.get(bucket, []):
+            if item.get("id") != entry_id:
+                continue
+            if status is not None:
+                item["status"] = status
+            if content is not None:
+                item["content"] = content
+            if tag is not None:
+                item["tag"] = tag
+                tags = list(item.get("tags", []))
+                if tag and tag not in tags:
+                    tags.append(tag)
+                item["tags"] = tags
+            item["updated_at"] = datetime.now(timezone.utc).isoformat()
+            scratch.setdefault("meta", {})["updated_at"] = item["updated_at"]
+            _save(project_root, scratch)
+            return item
+    return None
+
+
 def get_memory_stats(project_root: Path) -> dict:
     scratch = _load(project_root)
     episodic = scratch.get("episodic", [])

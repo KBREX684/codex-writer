@@ -1,6 +1,6 @@
 {
   "name": "codex-writer",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "中文长篇网文写作插件与本地 CLI 运行时",
   "author": {
     "name": "Codex Writer Project"
@@ -20,13 +20,13 @@
     "extract", "commit", "query", "status", "events",
     "migrate", "backup", "restore", "repair",
     "agents", "route-test", "run-agent",
-    "preflight", "references", "memory", "reading-power",
-    "learn", "dashboard"
+    "preflight", "genres", "references", "memory", "reading-power",
+    "learn", "dashboard", "use", "where", "resume"
   ],
   "interface": {
     "displayName": "Codex Writer",
     "shortDescription": "中文长篇网文创作工作流、审查、投影与观测面板",
-    "longDescription": "Codex Writer 提供面向中文长篇网文作者的本地写作运行时，包括故事合同、章节任务书、写章流程、结构化审查、事实抽取、章节提交、投影读模型、记忆、追读力和只读 dashboard。",
+    "longDescription": "Codex Writer 提供面向中文长篇网文作者的本地写作运行时，包括故事合同、章节任务书、写章流程、结构化审查、事实抽取、章节提交、投影读模型、题材模板、记忆、追读力、项目恢复和只读 dashboard。",
     "developerName": "Codex Writer Project",
     "category": "Productivity",
     "capabilities": [

@@ -11,6 +11,13 @@ description: Query characters, settings, foreshadowing, chapter summaries, refer
 codex-writer dashboard --project-root <ROOT>
 ```
 
+## 工作区恢复
+
+```bash
+codex-writer where
+codex-writer resume
+```
+
 ## 人物查询
 
 ```bash
@@ -43,6 +50,8 @@ codex-writer references search --query "武侠爽点写法" --project-root <ROOT
 ```bash
 codex-writer memory stats --project-root <ROOT>
 codex-writer memory query --project-root <ROOT> --tag character
+codex-writer memory dump --project-root <ROOT>
+codex-writer memory conflicts --project-root <ROOT>
 codex-writer reading-power status --project-root <ROOT>
 codex-writer reading-power debts --project-root <ROOT>
 ```

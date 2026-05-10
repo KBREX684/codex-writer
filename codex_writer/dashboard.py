@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from pathlib import Path
 
@@ -16,6 +17,9 @@ def build_dashboard(project_root: Path) -> dict:
         "memory": {},
         "reading_power": {},
         "entities": [],
+        "event_chain": {"total_events": 0, "by_type": {}, "recent_events": []},
+        "foreshadowing": {"open_count": 0, "open_loops": []},
+        "entity_graph": {"entities_count": 0, "relationships_count": 0, "recent_relationships": []},
     }
 
     sp = state_path(project_root)
@@ -56,9 +60,14 @@ def build_dashboard(project_root: Path) -> dict:
     result["review"] = review_summary
 
     try:
-        from codex_writer.memory.scratchpad import get_memory_stats
+        from codex_writer.memory.scratchpad import get_active_loops, get_memory_stats
 
         result["memory"] = get_memory_stats(project_root)
+        loops = get_active_loops(project_root)
+        result["foreshadowing"] = {
+            "open_count": len(loops),
+            "open_loops": [_compact_loop(loop) for loop in loops[-10:]],
+        }
     except (ImportError, OSError, ValueError, KeyError):
         result["memory"] = {"error": "memory scratchpad unavailable"}
 
@@ -82,10 +91,111 @@ def build_dashboard(project_root: Path) -> dict:
                         "type": row[1],
                         "data": row[2][:100] if row[2] else "",
                     })
+                event_rows = conn.execute(
+                    "SELECT chapter, event_type, subject, payload_json FROM events ORDER BY chapter, id"
+                ).fetchall()
+                events = [_compact_event(row) for row in event_rows]
+                if events:
+                    result["event_chain"] = _event_chain(events)
+                relationship_rows = conn.execute(
+                    "SELECT chapter, from_entity, to_entity, type, description FROM relationships ORDER BY chapter DESC, id DESC LIMIT 10"
+                ).fetchall()
+                relationships = [_compact_relationship(row) for row in relationship_rows]
+                result["entity_graph"] = {
+                    "entities_count": len(result["entities"]),
+                    "relationships_count": len(relationships),
+                    "recent_relationships": relationships,
+                }
     except (ImportError, OSError):
         pass
 
+    if result["event_chain"]["total_events"] == 0:
+        events = _events_from_json_files(cw / "events")
+        if events:
+            result["event_chain"] = _event_chain(events)
+    if result["event_chain"]["total_events"] == 0 and result["chapters"]:
+        result["event_chain"] = _event_chain(_events_from_chapters(result["chapters"]))
+
     return result
+
+
+def _compact_event(row_or_event) -> dict:
+    if isinstance(row_or_event, dict):
+        payload = row_or_event.get("payload", {})
+        return {
+            "chapter": int(row_or_event.get("chapter", 0) or 0),
+            "event_type": row_or_event.get("event_type", ""),
+            "subject": row_or_event.get("subject", ""),
+            "payload": payload if isinstance(payload, dict) else {},
+        }
+    try:
+        payload = json.loads(row_or_event["payload_json"] or "{}")
+    except (TypeError, ValueError, KeyError):
+        payload = {}
+    return {
+        "chapter": int(row_or_event["chapter"] or 0),
+        "event_type": row_or_event["event_type"] or "",
+        "subject": row_or_event["subject"] or "",
+        "payload": payload,
+    }
+
+
+def _compact_relationship(row) -> dict:
+    return {
+        "chapter": int(row["chapter"] or 0),
+        "from": row["from_entity"] or "",
+        "to": row["to_entity"] or "",
+        "type": row["type"] or "",
+        "description": row["description"] or "",
+    }
+
+
+def _compact_loop(loop: dict) -> dict:
+    return {
+        "id": loop.get("id", ""),
+        "chapter": loop.get("chapter", 0),
+        "type": loop.get("type", ""),
+        "content": loop.get("content") or loop.get("subject") or str(loop.get("payload", ""))[:80],
+        "status": loop.get("status", ""),
+    }
+
+
+def _event_chain(events: list[dict]) -> dict:
+    by_type: dict[str, int] = {}
+    for event in events:
+        event_type = event.get("event_type", "unknown") or "unknown"
+        by_type[event_type] = by_type.get(event_type, 0) + 1
+    return {
+        "total_events": len(events),
+        "by_type": by_type,
+        "recent_events": events[-10:],
+    }
+
+
+def _events_from_json_files(events_dir: Path) -> list[dict]:
+    if not events_dir.exists():
+        return []
+    events: list[dict] = []
+    for path in sorted(events_dir.glob("*.json")):
+        try:
+            payload = read_json(path)
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, list):
+            events.extend(_compact_event(item) for item in payload if isinstance(item, dict))
+    return events
+
+
+def _events_from_chapters(chapters: list[dict]) -> list[dict]:
+    events = []
+    for chapter in chapters:
+        events.append({
+            "chapter": chapter.get("chapter", 0),
+            "event_type": f"chapter_{chapter.get('status', 'recorded')}",
+            "subject": chapter.get("title", ""),
+            "payload": {"word_count": chapter.get("word_count", 0)},
+        })
+    return events
 
 
 def format_dashboard_text(data: dict) -> str:
@@ -132,6 +242,13 @@ def format_dashboard_text(data: dict) -> str:
         f"最老未兑现 Ch.{rp.get('oldest_open', 0)}"
     )
 
+    events = data.get("event_chain", {})
+    event_types = ", ".join(f"{k}:{v}" for k, v in events.get("by_type", {}).items()) or "无"
+    lines.append(f"事件链: {events.get('total_events', 0)} 条 | {event_types}")
+
+    loops = data.get("foreshadowing", {})
+    lines.append(f"伏笔: 开放 {loops.get('open_count', 0)} 条")
+
     entities = data.get("entities", [])
     if entities:
         ent_str = ", ".join(f"{e['name']}({e['type']})" for e in entities[:8])
@@ -158,6 +275,9 @@ def render_dashboard_html(data: dict) -> str:
     memory = data.get("memory", {})
     reading_power = data.get("reading_power", {})
     entities = data.get("entities", [])
+    event_chain = data.get("event_chain", {})
+    foreshadowing = data.get("foreshadowing", {})
+    entity_graph = data.get("entity_graph", {})
 
     accepted = sum(1 for ch in chapters if ch.get("status") == "accepted")
     rejected = sum(1 for ch in chapters if ch.get("status") == "rejected")
@@ -169,6 +289,9 @@ def render_dashboard_html(data: dict) -> str:
 
     chapter_tiles = "\n".join(_chapter_tile(ch) for ch in chapters[-24:]) or '<div class="empty">暂无章节记录</div>'
     entity_rows = "\n".join(_entity_row(e) for e in entities[:10]) or '<div class="empty">暂无实体投影</div>'
+    event_rows = "\n".join(_event_row(e) for e in event_chain.get("recent_events", [])[-8:]) or '<div class="empty">暂无事件</div>'
+    loop_rows = "\n".join(_loop_row(loop) for loop in foreshadowing.get("open_loops", [])[:8]) or '<div class="empty">暂无开放伏笔</div>'
+    relationship_rows = "\n".join(_relationship_row(rel) for rel in entity_graph.get("recent_relationships", [])[:8]) or '<div class="empty">暂无关系投影</div>'
     severity_rows = _severity_rows(review.get("by_severity", {}))
 
     return f"""<!doctype html>
@@ -459,6 +582,8 @@ def render_dashboard_html(data: dict) -> str:
         <a href="#review">审查</a>
         <a href="#memory">记忆</a>
         <a href="#reading">追读力</a>
+        <a href="#events">事件链</a>
+        <a href="#loops">伏笔</a>
         <a href="#entities">实体</a>
       </nav>
     </aside>
@@ -498,6 +623,11 @@ def render_dashboard_html(data: dict) -> str:
           <div class="number">{reading_power.get('open', 0)} <small>open</small></div>
           <div class="meta">过期 {reading_power.get('expired', 0)} · 已兑现 {reading_power.get('paid', 0)}</div>
         </div>
+        <div class="panel metric">
+          <div class="label">事件链</div>
+          <div class="number">{event_chain.get('total_events', 0)}</div>
+          <div class="meta">主线、伏笔与实体变化的可追踪记录</div>
+        </div>
 
         <div class="panel wide" id="chapters">
           <div class="label">最近章节网格</div>
@@ -530,6 +660,20 @@ def render_dashboard_html(data: dict) -> str:
           <div class="label">实体投影</div>
           <div class="list">{entity_rows}</div>
         </div>
+        <div class="panel wide" id="events">
+          <div class="label">事件链</div>
+          <div class="list">{event_rows}</div>
+        </div>
+        <div class="panel sidepanel" id="loops">
+          <div class="label">伏笔</div>
+          <div class="number">{foreshadowing.get('open_count', 0)} <small>open</small></div>
+          <div class="list" style="margin-top: 18px;">{loop_rows}</div>
+        </div>
+        <div class="panel sidepanel">
+          <div class="label">关系投影</div>
+          <div class="meta">实体 {entity_graph.get('entities_count', len(entities))} · 关系 {entity_graph.get('relationships_count', 0)}</div>
+          <div class="list" style="margin-top: 18px;">{relationship_rows}</div>
+        </div>
       </section>
       <div class="footer">Generated by Codex Writer · 只读面板，不修改项目状态</div>
     </main>
@@ -555,6 +699,38 @@ def _entity_row(entity: dict) -> str:
         '<div class="row">'
         f"<strong>{escape(str(entity.get('name') or '未命名'))}</strong>"
         f"<span>{escape(str(entity.get('type') or 'unknown'))}</span>"
+        "</div>"
+    )
+
+
+def _event_row(event: dict) -> str:
+    label = f"第{int(event.get('chapter', 0) or 0):04d}章 · {event.get('event_type', 'event')}"
+    return (
+        '<div class="row">'
+        f"<strong>{escape(label)}</strong>"
+        f"<span>{escape(str(event.get('subject') or '-'))}</span>"
+        "</div>"
+    )
+
+
+def _loop_row(loop: dict) -> str:
+    label = f"第{int(loop.get('chapter', 0) or 0):04d}章 · {loop.get('status', 'open')}"
+    content = str(loop.get("content") or loop.get("id") or "-")
+    return (
+        '<div class="row">'
+        f"<strong>{escape(label)}</strong>"
+        f"<span>{escape(content[:32])}</span>"
+        "</div>"
+    )
+
+
+def _relationship_row(relationship: dict) -> str:
+    left = f"{relationship.get('from', '')} → {relationship.get('to', '')}"
+    right = relationship.get("type", "") or relationship.get("description", "") or "-"
+    return (
+        '<div class="row">'
+        f"<strong>{escape(left)}</strong>"
+        f"<span>{escape(str(right))}</span>"
         "</div>"
     )
 
