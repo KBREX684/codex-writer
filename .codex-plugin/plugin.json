@@ -14,15 +14,6 @@
     "skills"
   ],
   "skills": "./skills/",
-  "entry": "scripts/codex_writer.py",
-  "commands": [
-    "init", "doctor", "plan", "context", "write", "review",
-    "extract", "commit", "query", "status", "events",
-    "migrate", "backup", "restore", "repair",
-    "agents", "route-test", "run-agent",
-    "preflight", "genres", "references", "memory", "reading-power",
-    "learn", "dashboard", "use", "where", "resume"
-  ],
   "interface": {
     "displayName": "Codex Writer",
     "shortDescription": "中文长篇网文创作工作流、审查、投影与观测面板",
@@ -34,7 +25,11 @@
       "Read",
       "Write"
     ],
-    "defaultPrompt": "用 Codex Writer 初始化或继续一个中文长篇网文项目",
+    "defaultPrompt": [
+      "用 Codex Writer 初始化一本中文长篇网文。",
+      "继续当前 Codex Writer 小说项目并给出下一步。",
+      "生成 Codex Writer 项目的只读创作面板。"
+    ],
     "brandColor": "#0B0C0F",
     "screenshots": []
   }
