@@ -2,7 +2,7 @@
 
 面向中文长篇网文作者的本地写作插件与 CLI 运行时系统。
 
-当前版本：`v0.6.0`
+当前版本：`v0.7.0`
 
 ## 快速开始
 
@@ -15,6 +15,21 @@ codex-writer plan --project-root "./我的小说" --chapter 1 --title "入局"
 codex-writer write --project-root "./我的小说" --chapter 1
 codex-writer resume
 ```
+
+正式规划和正文生成需要外部模型 API。v0.7 起可以先配置 OpenAI-compatible provider，再显式进入生产模式：
+
+```bash
+set CODEX_WRITER_ALLOW_EXTERNAL_MODELS=1
+set CODEX_WRITER_OPENAI_COMPATIBLE_BASE_URL=https://api.example.com/v1
+set CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY=<your-api-key>
+set CODEX_WRITER_OPENAI_COMPATIBLE_MODEL=<writer-model>
+
+codex-writer preflight --project-root "./我的小说" --chapter 1 --production
+codex-writer plan --project-root "./我的小说" --chapter 1 --title "入局" --production
+codex-writer write --project-root "./我的小说" --chapter 1 --production
+```
+
+默认 `write` 仍是本地 MVP 样稿闭环；`--production` 会要求 `planning_agent` / `draft_agent` 路由到外部 provider，否则直接阻断。
 
 ## 核心命令
 
@@ -56,6 +71,7 @@ Codex Writer 采用"合同优先 + 提交优先"的主链架构：
 - [命令详解](docs/guides/commands.md)
 - [运维指南](docs/operations/operations.md)
 - [架构概述](docs/architecture/overview.md)
+- [v0.7 发布说明](docs/releases/v0.7.md)
 - [v0.6 发布说明](docs/releases/v0.6.md)
 - [后 MVP 规划](docs/codex-writer-post-mvp-backlog-v0.1.md)
 

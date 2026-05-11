@@ -21,7 +21,7 @@ def test_python_version_contract_matches_supported_runtime():
     assert 'requires-python = ">=3.10"' in pyproject_text
 
 
-def test_release_version_and_plugin_manifest_match_v06_surface():
+def test_release_version_and_plugin_manifest_match_v07_surface():
     pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8")
     plugin = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     expected_commands = {
@@ -31,8 +31,8 @@ def test_release_version_and_plugin_manifest_match_v06_surface():
         "reading-power", "learn", "dashboard", "genres", "use", "where", "resume",
     }
 
-    assert 'version = "0.6.0"' in pyproject_text
-    assert plugin["version"] == "0.6.0"
+    assert 'version = "0.7.0"' in pyproject_text
+    assert plugin["version"] == "0.7.0"
     assert plugin["skills"] == "./skills/"
     assert "entry" not in plugin
     assert "commands" not in plugin
@@ -40,7 +40,7 @@ def test_release_version_and_plugin_manifest_match_v06_surface():
     assert 1 <= len(plugin["interface"]["defaultPrompt"]) <= 3
 
     from codex_writer import __version__
-    assert __version__ == "0.6.0"
+    assert __version__ == "0.7.0"
 
     help_text = subprocess.run(
         [sys.executable, "-m", "codex_writer.cli", "--help"],

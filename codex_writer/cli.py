@@ -63,6 +63,38 @@ def _to_error_obj(e: CodexWriterError) -> dict:
     }
 
 
+def _normalize_chapter_brief(candidate: dict, chapter: int, title: str, fallback: dict | None = None) -> dict:
+    brief = dict(fallback or {})
+    if isinstance(candidate, dict):
+        brief.update(candidate)
+    brief["meta"] = {"schema_version": "codex-writer/chapter-brief/v1"}
+    brief["chapter"] = chapter
+    if not isinstance(brief.get("title"), str) or not brief["title"].strip():
+        brief["title"] = title
+    for key in ("goal", "context_summary", "ending_hook"):
+        if not isinstance(brief.get(key), str):
+            brief[key] = ""
+    for key in (
+        "must_cover_nodes",
+        "forbidden_zones",
+        "key_entities",
+        "character_motivation",
+        "style_guidance",
+        "anti_ai_reminders",
+    ):
+        if not isinstance(brief.get(key), list):
+            brief[key] = []
+    return brief
+
+
+def _provider_failure_errors(result: dict, empty_message: str) -> list[dict]:
+    if result.get("error"):
+        return [{"code": "PROVIDER_FAILURE", "message": str(result["error"]), "blocking": True}]
+    if not result.get("text", "").strip() and not result.get("json"):
+        return [{"code": "PROVIDER_EMPTY_OUTPUT", "message": empty_message, "blocking": True}]
+    return []
+
+
 def cmd_init(args):
     project_root = Path(args.project_root).resolve()
     cw = project_root / ".codex-writer"
@@ -210,13 +242,71 @@ def cmd_plan(args):
     except ImportError:
         pass
 
+    if args.production:
+        from codex_writer.agents.execution import payload_chars, resolve_agent_provider
+        from codex_writer.agents.agents import write_agent_run
+
+        payload = {
+            "chapter": chapter,
+            "title": brief_title,
+            "seed_brief": brief,
+            "required_schema": "codex-writer/chapter-brief/v1",
+            "instruction": "Return only a JSON object for a chapter brief. Do not include markdown.",
+        }
+        resolution = resolve_agent_provider(
+            project_root,
+            "planning_agent",
+            require_external=True,
+            input_kind="context_pack",
+            input_chars=payload_chars(payload),
+        )
+        if resolution["errors"]:
+            output_json("plan", ok=False, project_root=str(project_root), errors=resolution["errors"])
+            return resolution["exit_code"]
+
+        result = resolution["provider_obj"].generate({
+            "system_prompt": "planning_agent: create a production chapter brief as strict JSON.",
+            "task_prompt": json.dumps(payload, ensure_ascii=False),
+            "temperature": 0.4,
+        })
+        errors = _provider_failure_errors(result, "planning_agent returned no JSON")
+        if not errors and not result.get("json"):
+            errors = [{
+                "code": "INVALID_PROVIDER_OUTPUT",
+                "message": "planning_agent must return a JSON chapter brief",
+                "blocking": True,
+            }]
+        if errors:
+            output_json("plan", ok=False, project_root=str(project_root), errors=errors)
+            return 5
+
+        brief = _normalize_chapter_brief(result["json"], chapter, brief_title, fallback=brief)
+        suggestions["production_provider"] = {
+            "agent": "planning_agent",
+            "provider": resolution["provider"],
+            "model": resolution["model"],
+        }
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        write_agent_run(project_root, {
+            "task_id": f"ch{chapter:04d}-planning_agent-{run_id}",
+            "run_id": run_id,
+            "chapter": chapter,
+            "agent": "planning_agent",
+            "provider": resolution["provider"],
+            "model": resolution["model"],
+            "status": "completed",
+            "input_refs": [],
+            "usage": result.get("usage", {}),
+            "errors": [],
+        }, input_text=json.dumps(payload, ensure_ascii=False), output_text=result.get("text", ""))
+
     if args.dry_run:
-        output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "dry_run": True}, project_root=str(project_root))
+        output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "dry_run": True, "production": bool(args.production)}, project_root=str(project_root))
         return 0
 
     path = project_root / ".codex-writer" / "story" / "chapters" / f"第{chapter:04d}章任务书.json"
     write_json_atomic(path, brief)
-    output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions}, project_root=str(project_root))
+    output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "production": bool(args.production)}, project_root=str(project_root))
     return 0
 
 
@@ -274,23 +364,74 @@ def cmd_write(args):
         return 3
 
     log_workflow(project_root, run_id, chapter, "context_ready", "drafted", "draft_agent", "")
+    context_pack_path = None
     try:
         from codex_writer.story.context import write_context_pack
-        write_context_pack(project_root, chapter)
+        context_pack_path = write_context_pack(project_root, chapter)
     except Exception:
         warnings.append({"code": "CONTEXT_PACK_FAILED", "message": "写前资料包生成失败，继续执行"})
 
     brief = read_json(brief_path)
     title = brief.get("title", f"第{chapter:04d}章")
-    draft_text = f"第{chapter:04d}章 {title}\n\n萧衡站在旧城门前，握紧刚得到的青铜令。\n他知道，自己必须前往黑水城，查清令牌背后的来历。\n"
+    draft_provider = "codex"
+    draft_model = "default"
+    draft_usage = {}
+    draft_input_text = ""
+    if args.production:
+        from codex_writer.agents.execution import payload_chars, resolve_agent_provider
+
+        context_pack = {}
+        context_path = context_pack_path
+        if context_path and context_path.exists():
+            try:
+                context_pack = read_json(context_path)
+            except Exception:
+                context_pack = {}
+        payload = {
+            "chapter": chapter,
+            "title": title,
+            "brief": brief,
+            "context_pack": context_pack,
+            "instruction": "Return polished chapter prose as markdown text. Do not return JSON.",
+        }
+        resolution = resolve_agent_provider(
+            project_root,
+            "draft_agent",
+            require_external=True,
+            input_kind="context_pack",
+            input_chars=payload_chars(payload),
+        )
+        if resolution["errors"]:
+            errors.extend(resolution["errors"])
+            log_workflow(project_root, run_id, chapter, "context_ready", "blocked", "draft_agent", "")
+            output_json("write", ok=False, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
+            return resolution["exit_code"]
+        draft_input_text = json.dumps(payload, ensure_ascii=False)
+        result = resolution["provider_obj"].generate({
+            "system_prompt": "draft_agent: write the chapter prose. Return only markdown prose.",
+            "task_prompt": draft_input_text,
+            "temperature": 0.75,
+        })
+        provider_errors = _provider_failure_errors(result, "draft_agent returned empty prose")
+        if provider_errors:
+            errors.extend(provider_errors)
+            log_workflow(project_root, run_id, chapter, "context_ready", "blocked", "draft_agent", "")
+            output_json("write", ok=False, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
+            return 5
+        draft_text = result.get("text", "").strip()
+        draft_provider = resolution["provider"]
+        draft_model = resolution["model"]
+        draft_usage = result.get("usage", {})
+    else:
+        draft_text = f"第{chapter:04d}章 {title}\n\n萧衡站在旧城门前，握紧刚得到的青铜令。\n他知道，自己必须前往黑水城，查清令牌背后的来历。\n"
     md_path = chapter_md_path(project_root, chapter, title)
     write_markdown_atomic(md_path, draft_text)
     write_agent_run(project_root, {
         "task_id": f"ch{chapter:04d}-draft_agent-run_{run_id}",
         "run_id": run_id, "chapter": chapter,
-        "agent": "draft_agent", "provider": "codex", "model": "default",
-        "status": "completed", "input_refs": [], "usage": {}, "errors": []
-    })
+        "agent": "draft_agent", "provider": draft_provider, "model": draft_model,
+        "status": "completed", "input_refs": [], "usage": draft_usage, "errors": []
+    }, input_text=draft_input_text, output_text=draft_text)
 
     log_workflow(project_root, run_id, chapter, "drafted", "reviewed", "review_agent", "")
     review_result = run_review(project_root, chapter)
@@ -354,7 +495,10 @@ def cmd_write(args):
         "title": title,
         "status": commit["meta"]["status"],
         "word_count": chapter_text_word_count(project_root, chapter, commit.get("summary_text", "")),
-        "run_id": run_id
+        "run_id": run_id,
+        "production": bool(args.production),
+        "draft_provider": draft_provider,
+        "draft_model": draft_model
     }, project_root=str(project_root), run_id=run_id, warnings=warnings)
     return 0
 
@@ -667,24 +811,32 @@ def cmd_agents(args):
 def cmd_route_test(args):
     from pathlib import Path
     from codex_writer.agents.router import load_project_router, route_agent
-    from codex_writer.agents.privacy import PrivacyPolicy, can_send_external
+    from codex_writer.agents.execution import resolve_agent_provider
+    from codex_writer.agents.providers import is_external_provider
     project_root = Path(args.project_root).resolve()
     router = load_project_router(project_root)
     route = route_agent(router, args.agent)
-    policy = PrivacyPolicy()
-    if args.input_kind:
-        can_send = can_send_external(policy, args.input_kind)
-    else:
-        can_send = True
-    if not can_send:
+    if args.provider:
+        route = dict(route)
+        route["provider"] = args.provider
+    resolution = resolve_agent_provider(
+        project_root,
+        args.agent,
+        provider_override=args.provider or "",
+        require_external=False,
+        input_kind=args.input_kind or "context_pack",
+    )
+    if resolution["errors"]:
         output_json("route_test", ok=False, project_root=str(project_root),
-                    errors=[{"code": "PRIVACY_BLOCK", "message": "隐私策略禁止外发", "blocking": True}])
-        return 4
-    output_json("route_test", data={"agent": args.agent, "route": route, "can_send_external": can_send},
-                project_root=str(project_root))
+                    data={"agent": args.agent, "route": route}, errors=resolution["errors"])
+        return resolution["exit_code"]
+    output_json("route_test", data={
+        "agent": args.agent,
+        "route": route,
+        "can_send_external": (not is_external_provider(route.get("provider", "codex"))) or not resolution["errors"],
+        "provider_ready": True,
+    }, project_root=str(project_root))
     return 0
-
-
 def cmd_preflight(args):
     from pathlib import Path
     from codex_writer.runtime.health import check_mainline_health, check_projection_health
@@ -694,8 +846,18 @@ def cmd_preflight(args):
     if chapter is not None:
         proj_health = check_projection_health(project_root, chapter)
         health["projection_details"] = proj_health
-    output_json("preflight", ok=health["mainline_ready"], data=health, project_root=str(project_root))
-    return 0 if health["mainline_ready"] else 3
+    errors = []
+    exit_code = 0 if health["mainline_ready"] else 3
+    if args.production:
+        from codex_writer.agents.execution import production_preflight
+        production = production_preflight(project_root)
+        health["production"] = production
+        errors.extend(production["errors"])
+        if errors:
+            health["mainline_ready"] = False
+            exit_code = production["exit_code"]
+    output_json("preflight", ok=health["mainline_ready"], data=health, errors=errors, project_root=str(project_root))
+    return exit_code
 
 
 def cmd_run_agent(args):
@@ -703,6 +865,7 @@ def cmd_run_agent(args):
     from codex_writer.agents.router import load_project_router, route_agent
     from codex_writer.agents.prompts import build_agent_prompt
     from codex_writer.agents.agents import write_agent_run, create_agent_task
+    from codex_writer.agents.execution import resolve_agent_provider
     from codex_writer.agents.providers import MockProvider
 
     project_root = Path(args.project_root).resolve()
@@ -720,6 +883,9 @@ def cmd_run_agent(args):
 
     prompt = build_agent_prompt(args.agent, {"chapter": 1})
 
+    input_text = json.dumps({"system_prompt": prompt["system_prompt"], "task_prompt": prompt["task_prompt"]}, ensure_ascii=False)
+    output_text = ""
+
     if args.mock_output:
         provider = MockProvider(args.mock_output)
         result = provider.generate({"system_prompt": prompt["system_prompt"], "task_prompt": prompt["task_prompt"]})
@@ -734,13 +900,45 @@ def cmd_run_agent(args):
                 from codex_writer.core.io import write_json_atomic
                 write_json_atomic(out_path, result["json"])
                 task["output_ref"] = ".codex-writer/tmp/extraction_result.json"
+            output_text = result.get("text", "")
+    elif provider_name != "codex":
+        resolution = resolve_agent_provider(
+            project_root,
+            args.agent,
+            provider_override=args.provider or "",
+            require_external=False,
+            input_kind="context_pack",
+            input_chars=len(input_text),
+        )
+        task["provider"] = resolution["provider"]
+        task["model"] = resolution["model"]
+        if resolution["errors"]:
+            task["status"] = "failed"
+            task["errors"] = resolution["errors"]
+        else:
+            result = resolution["provider_obj"].generate({
+                "system_prompt": prompt["system_prompt"],
+                "task_prompt": prompt["task_prompt"],
+            })
+            if result["error"]:
+                task["status"] = "failed"
+                task["errors"] = [{"code": "PROVIDER_FAILURE", "message": str(result["error"])}]
+            else:
+                task["status"] = "completed"
+                task["usage"] = result.get("usage", {})
+                output_text = result.get("text", "")
+                out_path = project_root / ".codex-writer" / "tmp" / "agent_output.txt"
+                from codex_writer.core.io import write_markdown_atomic
+                write_markdown_atomic(out_path, output_text)
+                task["output_ref"] = ".codex-writer/tmp/agent_output.txt"
     else:
         task["status"] = "completed"
         task["output_ref"] = ".codex-writer/tmp/agent_output.txt"
 
-    record_path = write_agent_run(project_root, task)
-    output_json("run_agent", data={"agent": args.agent, "status": task["status"], "record": str(record_path)},
-                project_root=str(project_root))
+    record_path = write_agent_run(project_root, task, input_text=input_text, output_text=output_text)
+    output_json("run_agent", ok=(task["status"] == "completed"),
+                data={"agent": args.agent, "status": task["status"], "record": str(record_path)},
+                errors=task.get("errors", []), project_root=str(project_root))
     return 0 if task["status"] == "completed" else 5
 
 
@@ -961,6 +1159,7 @@ def _register_subparsers(subparsers):
     sp_plan.add_argument("--project-root", type=str, default=".")
     sp_plan.add_argument("--chapter", type=str, default="1")
     sp_plan.add_argument("--title", type=str, default="")
+    sp_plan.add_argument("--production", action="store_true")
     sp_plan.add_argument("--dry-run", action="store_true")
     sp_plan.add_argument("--format", type=str, default="text")
 
@@ -972,6 +1171,7 @@ def _register_subparsers(subparsers):
     sp_write = subparsers.add_parser("write", help="执行完整写章流程")
     sp_write.add_argument("--project-root", type=str, default=".")
     sp_write.add_argument("--chapter", type=str, default="1")
+    sp_write.add_argument("--production", action="store_true")
     sp_write.add_argument("--no-backup", action="store_true")
     sp_write.add_argument("--format", type=str, default="text")
 
@@ -1060,6 +1260,7 @@ def _register_subparsers(subparsers):
     sp_preflight = subparsers.add_parser("preflight", help="运行时健康检查")
     sp_preflight.add_argument("--project-root", type=str, default=".")
     sp_preflight.add_argument("--chapter", type=str, default=None)
+    sp_preflight.add_argument("--production", action="store_true")
     sp_preflight.add_argument("--format", type=str, default="text")
 
     sp_genres = subparsers.add_parser("genres", help="查看和应用中文网文题材模板")

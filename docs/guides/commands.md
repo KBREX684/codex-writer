@@ -64,20 +64,22 @@ codex-writer doctor --self-check
 ## preflight
 
 ```bash
-codex-writer preflight --project-root <path> [--chapter N]
+codex-writer preflight --project-root <path> [--chapter N] [--production]
 ```
 
 运行时健康检查。输出 `mainline_ready`、`projection_status`、`warnings`。
+`--production` 会额外检查 `planning_agent` 和 `draft_agent` 是否路由到已配置的外部 provider。
 
 ---
 
 ## plan
 
 ```bash
-codex-writer plan --project-root <path> --chapter N --title <title>
+codex-writer plan --project-root <path> --chapter N --title <title> [--production]
 ```
 
 生成或更新章节任务书（`.codex-writer/story/chapters/第NNNN章任务书.json`）。
+`--production` 会调用 `planning_agent` 的外部模型路由，要求模型返回章节任务书 JSON。
 
 如果项目 `genre` 命中内置题材模板，`plan` 会自动把题材风格约束和审查重点写入章节任务书。
 
@@ -96,10 +98,11 @@ codex-writer context --project-root <path> --chapter N
 ## write
 
 ```bash
-codex-writer write --project-root <path> --chapter N [--no-backup]
+codex-writer write --project-root <path> --chapter N [--production] [--no-backup]
 ```
 
 执行完整写章流程。状态机：planned → context_ready → drafted → reviewed → polished → extracted → committed → projected。
+默认模式使用本地 MVP 样稿生成，便于测试流程。`--production` 会调用 `draft_agent` 的外部模型路由生成正文；缺 API、隐私未放行或路由仍为 `codex` 时返回阻断错误。
 
 ---
 
@@ -172,6 +175,17 @@ codex-writer repair logs --project-root <path>
 codex-writer agents --project-root <path>
 codex-writer route-test --project-root <path> --agent <name> [--input-kind <kind>]
 codex-writer run-agent --project-root <path> --agent <name> [--mock-output <json>]
+```
+
+生产写作最小路由示例：
+
+```json
+{
+  "routes": {
+    "planning_agent": {"provider": "openai_compatible", "model": "writer-model"},
+    "draft_agent": {"provider": "openai_compatible", "model": "writer-model"}
+  }
+}
 ```
 
 ---

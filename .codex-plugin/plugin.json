@@ -1,6 +1,6 @@
 {
   "name": "codex-writer",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "中文长篇网文写作插件与本地 CLI 运行时",
   "author": {
     "name": "Codex Writer Project"

@@ -9,6 +9,7 @@ def load_default_router() -> dict:
         "schema_version": "codex-writer/router/v1",
         "default_provider": "codex",
         "routes": {
+            "planning_agent": {"provider": "codex", "model": "default"},
             "context_agent": {"provider": "codex", "model": "default"},
             "draft_agent": {"provider": "codex", "model": "default"},
             "review_agent": {"provider": "codex", "model": "default"},
