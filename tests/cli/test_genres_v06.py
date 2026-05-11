@@ -32,7 +32,7 @@ def test_plan_applies_matching_genre_template(tmp_path: Path):
     project = tmp_path / "book"
     assert run_cli("init", "--project-root", str(project), "--title", "测试书", "--genre", "玄幻", "--format", "json").returncode == 0
 
-    result = run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
+    result = run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["suggestions"]["genre_template"] == "玄幻"

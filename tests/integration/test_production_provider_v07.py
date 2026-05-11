@@ -23,6 +23,7 @@ def run_cli(*args, env=None):
 
 class ChatCompletionHandler(BaseHTTPRequestHandler):
     response_content = ""
+    response_contents = []
     requests = []
 
     def do_POST(self):
@@ -33,9 +34,10 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
             "authorization": self.headers.get("authorization", ""),
             "body": json.loads(body),
         })
+        content = self.__class__.response_contents.pop(0) if self.__class__.response_contents else self.__class__.response_content
         payload = {
             "choices": [
-                {"message": {"content": self.__class__.response_content}}
+                {"message": {"content": content}}
             ],
             "usage": {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
         }
@@ -51,7 +53,12 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
 
 
 def start_chat_server(content):
-    ChatCompletionHandler.response_content = content
+    if isinstance(content, list):
+        ChatCompletionHandler.response_contents = list(content)
+        ChatCompletionHandler.response_content = content[-1] if content else ""
+    else:
+        ChatCompletionHandler.response_contents = []
+        ChatCompletionHandler.response_content = content
     ChatCompletionHandler.requests = []
     server = HTTPServer(("127.0.0.1", 0), ChatCompletionHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -84,7 +91,7 @@ def provider_env(base_url):
 
 def test_production_preflight_requires_external_planning_and_draft_routes(tmp_path):
     project = make_project(tmp_path)
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--demo", "--format", "json")
 
     result = run_cli(
         "preflight",
@@ -142,14 +149,35 @@ def test_plan_production_uses_openai_compatible_provider(tmp_path):
 
 def test_write_production_uses_external_draft_text(tmp_path):
     project = make_project(tmp_path)
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--demo", "--format", "json")
     set_route(project, "draft_agent")
+    set_route(project, "extract_agent")
     draft = (
         "# Chapter 0001 Entry\n\n"
         "Xiao Heng obtained the bronze token before dawn and stepped into Blackwater City.\n\n"
         "\"Open the gate,\" he said. The guards fell silent as the seal cracked."
     )
-    server, base_url, requests = start_chat_server(draft)
+    extraction = {
+        "meta": {"schema_version": "codex-writer/extraction-result/v1"},
+        "chapter": 1,
+        "covered_nodes": [],
+        "missed_nodes": [],
+        "pending_disambiguation": [],
+        "state_deltas": [],
+        "entity_deltas": [],
+        "entities_appeared": [{"entity": "Xiao Heng", "count": 1, "first_position": 2}],
+        "accepted_events": [{
+            "event_id": "ch0001-token",
+            "chapter": 1,
+            "event_type": "plot_node_covered",
+            "subject": "bronze token",
+            "payload": {"source": "test"},
+        }],
+        "scenes": [{"index": 1, "text_preview": "Xiao Heng obtained the bronze token"}],
+        "summary_text": "Xiao Heng obtained the bronze token.",
+        "dominant_thread": "bronze token",
+    }
+    server, base_url, requests = start_chat_server([draft, json.dumps(extraction)])
     try:
         result = run_cli(
             "write",
@@ -167,7 +195,9 @@ def test_write_production_uses_external_draft_text(tmp_path):
     assert "bronze token" in chapter_text
     payload = json.loads(result.stdout)
     assert payload["data"]["production"] is True
+    assert payload["data"]["extract_provider"] == "openai_compatible"
     assert requests[0]["body"]["model"] == "writer-test"
+    assert requests[1]["body"]["model"] == "writer-test"
 
 
 def test_run_agent_calls_openai_compatible_provider_when_routed(tmp_path):

@@ -49,8 +49,8 @@ def test_resume_advances_after_accepted_chapter(tmp_path):
     project = tmp_path / "book"
 
     assert run_cli("init", "--project-root", str(project), "--title", "测试书", "--format", "json", env=env).returncode == 0
-    assert run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json", env=env).returncode == 0
-    assert run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json", env=env).returncode == 0
+    assert run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json", env=env).returncode == 0
+    assert run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json", env=env).returncode == 0
     assert run_cli("use", "--project-root", str(project), "--format", "json", env=env).returncode == 0
 
     resume = run_cli("resume", "--format", "json", env=env)

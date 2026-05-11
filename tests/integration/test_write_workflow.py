@@ -11,8 +11,8 @@ def run_cli(*args):
 def test_write_runs_one_chapter_pipeline(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    result = run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    result = run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
@@ -25,8 +25,8 @@ def test_write_runs_one_chapter_pipeline(tmp_path):
 def test_write_pipeline_records_polish_step_and_agent_runs(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    result = run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    result = run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     assert result.returncode == 0
 
     workflow = [

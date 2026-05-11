@@ -39,7 +39,13 @@ def is_external_provider(provider: str) -> bool:
     return provider == OPENAI_COMPATIBLE
 
 
-def provider_config_errors(provider: str, settings: Settings | None = None, model: str = "") -> list[dict]:
+def provider_config_errors(
+    provider: str,
+    settings: Settings | None = None,
+    model: str = "",
+    base_url: str = "",
+    api_key: str = "",
+) -> list[dict]:
     settings = settings or load_settings()
     if provider in ("", CODEX_PROVIDER, MOCK_PROVIDER):
         return []
@@ -51,11 +57,15 @@ def provider_config_errors(provider: str, settings: Settings | None = None, mode
         }]
 
     missing = []
-    if not settings.openai_compatible_base_url:
+    effective_base_url = base_url or settings.openai_compatible_base_url
+    effective_api_key = api_key or settings.openai_compatible_api_key
+    route_model = model if model and model != "default" else ""
+    effective_model = route_model or _effective_model(settings, "")
+    if not effective_base_url:
         missing.append("CODEX_WRITER_OPENAI_COMPATIBLE_BASE_URL")
-    if not settings.openai_compatible_api_key:
+    if not effective_api_key:
         missing.append("CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY")
-    if not _effective_model(settings, model):
+    if not effective_model:
         missing.append("CODEX_WRITER_OPENAI_COMPATIBLE_MODEL or route.model")
     if not missing:
         return []
@@ -67,13 +77,13 @@ def provider_config_errors(provider: str, settings: Settings | None = None, mode
 
 
 def create_provider(provider: str, model: str = "", settings: Settings | None = None,
-                    mock_output: str | None = None) -> ModelProvider:
+                    mock_output: str | None = None, provider_options: dict | None = None) -> ModelProvider:
     if mock_output is not None:
         return MockProvider(mock_output)
     if provider in ("", CODEX_PROVIDER):
         return CodexProvider()
     if provider == OPENAI_COMPATIBLE:
-        return OpenAICompatibleProvider(settings or load_settings(), model=model)
+        return OpenAICompatibleProvider(settings or load_settings(), model=model, options=provider_options or {})
     raise ProviderConfigurationError(f"Unsupported provider: {provider}")
 
 
@@ -94,10 +104,22 @@ def parse_json_content(content: str) -> dict:
 
 
 class OpenAICompatibleProvider:
-    def __init__(self, settings: Settings | None = None, model: str = ""):
+    def __init__(self, settings: Settings | None = None, model: str = "", options: dict | None = None):
         self.settings = settings or load_settings()
-        self.model = _effective_model(self.settings, model)
-        errors = provider_config_errors(OPENAI_COMPATIBLE, self.settings, self.model)
+        options = options or {}
+        route_model = model if model and model != "default" else ""
+        self.model = route_model or options.get("model") or _effective_model(self.settings, "")
+        self.base_url = options.get("base_url") or self.settings.openai_compatible_base_url
+        self.api_key = options.get("api_key") or self.settings.openai_compatible_api_key
+        self.timeout_seconds = float(options.get("timeout") or self.settings.openai_compatible_timeout_seconds)
+        self.max_tokens = int(options.get("max_tokens") or self.settings.openai_compatible_max_tokens or 0)
+        errors = provider_config_errors(
+            OPENAI_COMPATIBLE,
+            self.settings,
+            self.model,
+            base_url=self.base_url,
+            api_key=self.api_key,
+        )
         if errors:
             raise ProviderConfigurationError(errors[0]["message"])
 
@@ -110,15 +132,15 @@ class OpenAICompatibleProvider:
             ],
             "temperature": task.get("temperature", 0.7),
         }
-        max_tokens = int(task.get("max_tokens") or self.settings.openai_compatible_max_tokens or 0)
+        max_tokens = int(task.get("max_tokens") or self.max_tokens or 0)
         if max_tokens > 0:
             body["max_tokens"] = max_tokens
 
         request = urllib.request.Request(
-            _chat_completions_url(self.settings.openai_compatible_base_url),
+            _chat_completions_url(self.base_url),
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.settings.openai_compatible_api_key}",
+                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
             method="POST",
@@ -126,7 +148,7 @@ class OpenAICompatibleProvider:
         try:
             with urllib.request.urlopen(
                 request,
-                timeout=self.settings.openai_compatible_timeout_seconds,
+                timeout=self.timeout_seconds,
             ) as response:
                 raw_text = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:

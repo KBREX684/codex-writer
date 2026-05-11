@@ -21,18 +21,19 @@ def test_python_version_contract_matches_supported_runtime():
     assert 'requires-python = ">=3.10"' in pyproject_text
 
 
-def test_release_version_and_plugin_manifest_match_v07_surface():
+def test_release_version_and_plugin_manifest_match_v10_surface():
     pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8")
     plugin = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     expected_commands = {
         "init", "doctor", "plan", "context", "write", "review", "extract", "commit",
         "query", "status", "events", "migrate", "backup", "restore", "repair",
-        "agents", "route-test", "run-agent", "preflight", "references", "memory",
+        "agents", "provider", "route-test", "run-agent", "preflight", "references", "memory",
         "reading-power", "learn", "dashboard", "genres", "use", "where", "resume",
     }
 
-    assert 'version = "0.7.0"' in pyproject_text
-    assert plugin["version"] == "0.7.0"
+    assert 'version = "1.0.0"' in pyproject_text
+    assert "MVP" not in pyproject_text
+    assert plugin["version"] == "1.0.0"
     assert plugin["skills"] == "./skills/"
     assert "entry" not in plugin
     assert "commands" not in plugin
@@ -40,7 +41,7 @@ def test_release_version_and_plugin_manifest_match_v07_surface():
     assert 1 <= len(plugin["interface"]["defaultPrompt"]) <= 3
 
     from codex_writer import __version__
-    assert __version__ == "0.7.0"
+    assert __version__ == "1.0.0"
 
     help_text = subprocess.run(
         [sys.executable, "-m", "codex_writer.cli", "--help"],

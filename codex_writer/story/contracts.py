@@ -100,3 +100,9 @@ def create_provider_example_json() -> dict:
             }
         }
     }
+
+
+def create_provider_config_json() -> dict:
+    from codex_writer.agents.provider_config import default_provider_config
+
+    return default_provider_config()

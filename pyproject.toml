@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-writer"
-version = "0.7.0"
-description = "Codex Writer MVP - 中文长篇网文创作插件与本地运行时"
+version = "1.0.0"
+description = "Codex Writer - 中文长篇网文创作插件与本地运行时"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.7",

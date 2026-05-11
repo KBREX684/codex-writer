@@ -7,11 +7,15 @@ from codex_writer.agents.providers import (
     is_external_provider,
     provider_config_errors,
 )
+from codex_writer.agents.provider_config import (
+    PRODUCTION_AGENT_NAMES,
+    resolve_openai_compatible_options,
+)
 from codex_writer.agents.router import load_project_router, route_agent
 from codex_writer.core.config import load_settings
 
 
-PRODUCTION_AGENTS = ("planning_agent", "draft_agent")
+PRODUCTION_AGENTS = PRODUCTION_AGENT_NAMES
 
 
 def resolve_agent_provider(project_root: Path, agent: str, provider_override: str = "",
@@ -41,12 +45,24 @@ def resolve_agent_provider(project_root: Path, agent: str, provider_override: st
                 "message": "Privacy policy blocks external model calls",
                 "blocking": True,
             })
-        errors.extend(provider_config_errors(provider, settings, model))
+        provider_options = resolve_openai_compatible_options(project_root, route_model=model, settings=settings)
+        model = provider_options["model"]
+        errors.extend(
+            provider_config_errors(
+                provider,
+                settings,
+                model,
+                base_url=provider_options["base_url"],
+                api_key=provider_options["api_key"],
+            )
+        )
+    else:
+        provider_options = {}
 
     exit_code = _exit_code_for_errors(errors)
     provider_obj = None
     if not errors:
-        provider_obj = create_provider(provider, model=model, settings=settings)
+        provider_obj = create_provider(provider, model=model, settings=settings, provider_options=provider_options)
 
     return {
         "agent": agent,
@@ -54,6 +70,7 @@ def resolve_agent_provider(project_root: Path, agent: str, provider_override: st
         "provider": provider,
         "model": model,
         "provider_obj": provider_obj,
+        "provider_options": provider_options,
         "errors": errors,
         "exit_code": exit_code,
     }

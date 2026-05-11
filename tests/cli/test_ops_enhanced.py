@@ -13,8 +13,8 @@ def run_cli(*args):
 
 def build_project(project):
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
 
 
 def test_backup_list_shows_entry(tmp_path):
@@ -48,7 +48,7 @@ def test_status_focus_rag_reports_mode(tmp_path):
 def test_plan_with_references_enrichment(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    result = run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "秘境探险", "--format", "json")
+    result = run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "秘境探险", "--demo", "--format", "json")
     assert result.returncode == 0
     data = json.loads(result.stdout)
     assert data["data"]["chapter"] == 1
@@ -58,7 +58,7 @@ def test_plan_with_references_enrichment(tmp_path):
 def test_plan_dry_run_does_not_write_file(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    result = run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--dry-run", "--format", "json")
+    result = run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--dry-run", "--format", "json")
     assert result.returncode == 0
     data = json.loads(result.stdout)
     assert data["data"]["dry_run"] is True
@@ -89,8 +89,8 @@ def test_learn_content_persisted_in_memory(tmp_path):
 def test_memory_stats_shows_episodic_count(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     result = run_cli("memory", "stats", "--project-root", str(project), "--format", "json")
     assert result.returncode == 0
     data = json.loads(result.stdout)
@@ -100,8 +100,8 @@ def test_memory_stats_shows_episodic_count(tmp_path):
 def test_repair_projections_all_rebuilds(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     result = run_cli("repair", "projections", "--project-root", str(project), "--all", "--format", "json")
     assert result.returncode == 0
     data = json.loads(result.stdout)

@@ -12,12 +12,12 @@ def run_cli(*args):
 
 def prepare_chapter(project):
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
     chapter = project / "正文" / "第0001章-入局.md"
     chapter.parent.mkdir(exist_ok=True)
     chapter.write_text("萧衡获得青铜令，决定前往黑水城。", encoding="utf-8")
     run_cli("review", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
 
 
 def test_commit_accepted_updates_state_summary_memory_index(tmp_path):
@@ -73,7 +73,7 @@ def test_commit_persists_projection_status_and_sqlite_read_models(tmp_path):
 def test_state_word_count_uses_full_chapter_text_not_truncated_summary(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
 
     chapter_text = "第0001章 入局\n\n" + ("萧衡握紧青铜令，继续向黑水城前行。" * 30)
     chapter_path = chapter_md_path(project, 1, "入局")
@@ -81,7 +81,7 @@ def test_state_word_count_uses_full_chapter_text_not_truncated_summary(tmp_path)
     chapter_path.write_text(chapter_text, encoding="utf-8")
 
     run_cli("review", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     result = run_cli("commit", "--project-root", str(project), "--chapter", "1", "--format", "json")
     assert result.returncode == 0
 
@@ -122,7 +122,7 @@ def test_rejected_commit_records_state(tmp_path):
     chapter.parent.mkdir(exist_ok=True)
     chapter.write_text("", encoding="utf-8")
     run_cli("review", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     result = run_cli("commit", "--project-root", str(project), "--chapter", "1", "--format", "json")
     assert result.returncode == 3
     state = json.loads((project / ".codex-writer" / "state.json").read_text(encoding="utf-8"))

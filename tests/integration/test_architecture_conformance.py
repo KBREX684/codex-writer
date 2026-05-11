@@ -10,7 +10,7 @@ def run_cli(*args):
 def make_project(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
     chapter = project / "正文" / "第0001章-入局.md"
     chapter.write_text("萧衡获得青铜令，决定前往黑水城。", encoding="utf-8")
     return project
@@ -28,7 +28,7 @@ def test_write_blocks_when_story_contract_missing(tmp_path):
 def test_accepted_commit_does_not_double_count_words(tmp_path):
     project = make_project(tmp_path)
     run_cli("review", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     first = run_cli("commit", "--project-root", str(project), "--chapter", "1", "--format", "json")
     second = run_cli("commit", "--project-root", str(project), "--chapter", "1", "--format", "json")
     assert first.returncode == 0
@@ -87,7 +87,7 @@ def test_doctor_strict_reports_missing_migration(tmp_path):
 def test_query_state_deltas_returns_extracted_data(tmp_path):
     project = make_project(tmp_path)
     run_cli("review", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     extraction = project / ".codex-writer" / "tmp" / "extraction_result.json"
     payload = json.loads(extraction.read_text(encoding="utf-8"))
     payload["state_deltas"] = [{"entity": "萧衡", "field": "location", "new_value": "黑水城"}]
@@ -109,12 +109,12 @@ def test_query_state_deltas_returns_extracted_data(tmp_path):
 def test_open_loops_pass_to_next_chapter_context(tmp_path):
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
     chapter = project / "正文" / "第0001章-入局.md"
     chapter.parent.mkdir(exist_ok=True)
     chapter.write_text("萧衡获得青铜令，决定前往黑水城。", encoding="utf-8")
     run_cli("review", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("extract", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     extraction = project / ".codex-writer" / "tmp" / "extraction_result.json"
     payload = json.loads(extraction.read_text(encoding="utf-8"))
     payload["accepted_events"] = [{
@@ -126,7 +126,7 @@ def test_open_loops_pass_to_next_chapter_context(tmp_path):
     }]
     extraction.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     run_cli("commit", "--project-root", str(project), "--chapter", "1", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "2", "--title", "黑水城", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "2", "--title", "黑水城", "--demo", "--format", "json")
     result = run_cli("context", "--project-root", str(project), "--chapter", "2", "--format", "json")
     assert result.returncode == 0
     data = json.loads(result.stdout)

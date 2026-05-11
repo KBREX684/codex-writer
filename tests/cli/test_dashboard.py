@@ -11,8 +11,8 @@ def run_cli(*args):
 def prepare_project(tmp_path: Path) -> Path:
     project = tmp_path / "book"
     run_cli("init", "--project-root", str(project), "--title", "测试书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     return project
 
 

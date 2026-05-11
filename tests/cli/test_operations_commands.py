@@ -9,8 +9,8 @@ def run_cli(*args):
 
 def build_project(project):
     run_cli("init", "--project-root", str(project), "--title", "书", "--genre", "修仙", "--format", "json")
-    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--format", "json")
-    run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "入局", "--demo", "--format", "json")
+    run_cli("write", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
 
 
 def test_status_and_events_health(tmp_path):
@@ -50,7 +50,7 @@ def test_repair_logs_rebuilds_agent_runs(tmp_path):
 def test_preflight_reports_mainline_ready_after_write(tmp_path):
     project = tmp_path / "book"
     build_project(project)
-    result = run_cli("preflight", "--project-root", str(project), "--chapter", "1", "--format", "json")
+    result = run_cli("preflight", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["mainline_ready"] is True

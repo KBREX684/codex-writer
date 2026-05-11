@@ -1,175 +1,115 @@
 # Codex Writer 命令详解
 
-项目型命令支持 `--project-root <path>`，命令统一支持 `--format json` 或保持兼容的 JSON 输出。JSON 输出格式为：
+所有项目命令支持 `--project-root <path>`，机器可读输出使用 `--format json`。
 
-```json
-{"ok": true, "command": "write", "project_root": "", "run_id": "", "data": {}, "warnings": [], "errors": []}
-```
-
-退出码：
+## 退出码
 
 | 码 | 含义 |
-|----|------|
+| --- | --- |
 | 0 | 成功 |
 | 1 | 未分类运行时错误 |
 | 2 | 参数或 schema 校验失败 |
-| 3 | 写前/审查/提交阻断 |
+| 3 | 写前、审查或提交阻断 |
 | 4 | 隐私策略阻断 |
-| 5 | provider 调用失败 |
+| 5 | provider 调用或生产配置失败 |
 | 6 | 文件或数据库 IO 失败 |
 | 7 | 迁移失败 |
 
----
-
-## init
+## 初始化
 
 ```bash
 codex-writer init --project-root <path> --title <title> --genre <genre>
 ```
 
-初始化书项目，创建完整目录结构：
+初始化项目目录、故事合同、章节任务目录、Agent 路由、provider 配置模板、日志、提交、投影读模型和备份目录。
 
-- `正文/` `大纲/` `设定/` `审查报告/`
-- `.codex-writer/story/`（写前真源）
-- `.codex-writer/commits/`（写后真源）
-- `.codex-writer/state.json` `memory.json` `summaries/` `index.sqlite`（投影读模型）
-- `.codex-writer/logs/` `agents/运行记录/`（观测与审计）
-
----
-
-## use / where / resume
+## Provider
 
 ```bash
-codex-writer use --project-root <path>
-codex-writer where
-codex-writer resume
-codex-writer resume --project-root <path>
+codex-writer provider --project-root <path> presets
+codex-writer provider --project-root <path> configure --preset openai|deepseek|qwen|custom --base-url <url> --model <model>
+codex-writer provider --project-root <path> status
+codex-writer provider --project-root <path> test
 ```
 
-工作区恢复命令。`use` 将项目绑定为当前活跃项目，状态写入 `CODEX_WRITER_HOME/workspace.json` 或用户目录下的 `.codex-writer/workspace.json`。`where` 查看当前绑定项目。`resume` 根据投影状态给出下一章编号和建议命令。
+`provider configure` 写入 `.codex-writer/agents/模型供应商.json`，只保存 `preset`、`base_url`、`model`、`timeout`、`max_tokens` 等非密钥字段，并把 `planning_agent`、`draft_agent`、`extract_agent` 路由到 `openai_compatible`。
 
----
-
-## doctor
+API Key 只能通过环境变量提供：
 
 ```bash
-codex-writer doctor --project-root <path> [--strict] [--chapter N]
-codex-writer doctor --self-check
+set CODEX_WRITER_ALLOW_EXTERNAL_MODELS=1
+set CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY=<your-api-key>
 ```
 
-检查项目健康状态。`--strict` 模式检查故事合同、章节任务书、迁移状态、占位符。
+配置优先级为：CLI 参数 > 环境变量 > 项目 provider 配置 > preset 默认值。
 
----
-
-## preflight
+## Preflight
 
 ```bash
-codex-writer preflight --project-root <path> [--chapter N] [--production]
+codex-writer preflight --project-root <path> [--chapter N]
+codex-writer preflight --project-root <path> [--chapter N] --demo
 ```
 
-运行时健康检查。输出 `mainline_ready`、`projection_status`、`warnings`。
-`--production` 会额外检查 `planning_agent` 和 `draft_agent` 是否路由到已配置的外部 provider。
+默认检查生产可用性，包括项目结构、章节状态、投影一致性、生产 Agent 路由、provider 配置、隐私开关和 API Key。`--demo` 只检查本地结构。
 
----
-
-## plan
+## Plan
 
 ```bash
-codex-writer plan --project-root <path> --chapter N --title <title> [--production]
+codex-writer plan --project-root <path> --chapter N --title <title>
+codex-writer plan --project-root <path> --chapter N --title <title> --demo
 ```
 
-生成或更新章节任务书（`.codex-writer/story/chapters/第NNNN章任务书.json`）。
-`--production` 会调用 `planning_agent` 的外部模型路由，要求模型返回章节任务书 JSON。
+默认调用 `planning_agent` 外部模型生成章节任务书 JSON。`--demo` 使用本地模板生成任务书，适合离线测试。
 
-如果项目 `genre` 命中内置题材模板，`plan` 会自动把题材风格约束和审查重点写入章节任务书。
+`--production` 是 v0.7 兼容别名，v1.0 默认已是生产链路。
 
----
-
-## context
+## Write
 
 ```bash
-codex-writer context --project-root <path> --chapter N
+codex-writer write --project-root <path> --chapter N [--no-backup]
+codex-writer write --project-root <path> --chapter N --demo
 ```
 
-输出写前资料包，包含：故事合同、章节任务书、近期摘要、未关闭伏笔、反AI反馈。
+默认执行生产链路：
 
----
+1. 生成写前资料包。
+2. 调用外部 `draft_agent` 生成正文。
+3. 强制执行本地 `review_agent` 阻断审查。
+4. 调用外部 `extract_agent` 抽取结构化事实。
+5. 本地执行 commit、events、state、summary、memory、index 投影。
 
-## write
+缺 provider、缺 API Key、隐私未放行、模型无效 JSON、schema 不合格、本地审查阻断时，`write` 不会生成 accepted commit。
 
-```bash
-codex-writer write --project-root <path> --chapter N [--production] [--no-backup]
-```
-
-执行完整写章流程。状态机：planned → context_ready → drafted → reviewed → polished → extracted → committed → projected。
-默认模式使用本地 MVP 样稿生成，便于测试流程。`--production` 会调用 `draft_agent` 的外部模型路由生成正文；缺 API、隐私未放行或路由仍为 `codex` 时返回阻断错误。
-
----
-
-## review
+## Review / Extract / Commit
 
 ```bash
 codex-writer review --project-root <path> --chapter N
-```
-
-审查指定章节。输出结构化审查结果 JSON 到 `.codex-writer/reviews/`。
-
----
-
-## extract
-
-```bash
 codex-writer extract --project-root <path> --chapter N
-```
-
-从正文抽取结构化事实（covered_nodes、entity_deltas、scenes、dominant_thread）。
-
----
-
-## commit
-
-```bash
+codex-writer extract --project-root <path> --chapter N --demo
 codex-writer commit --project-root <path> --chapter N [--no-backup]
 ```
 
-生成并应用章节提交。根据审查阻断状态判定 accepted 或 rejected。accepted 触发投影写入（state、summary、memory、index）。
+`review` 始终是本地规则审查。`extract` 默认调用外部 `extract_agent`，`--demo` 使用本地抽取器。`commit` 只消费本地审查结果和抽取结果，外部 Agent 不能绕过它直接写提交。
 
----
-
-## query
+## Project Ops
 
 ```bash
-codex-writer query entity --name <NAME>
-codex-writer query loops
-<!-- codex-writer query state-deltas  (未实现) -->
-```
-
----
-
-## status / events
-
-```bash
-codex-writer status --project-root <path>
+codex-writer status --project-root <path> [--focus memory|rag|all]
 codex-writer events --project-root <path> --chapter N
 codex-writer events --project-root <path> --health
-```
-
----
-
-## migrate / backup / restore / repair
-
-```bash
 codex-writer migrate --project-root <path>
 codex-writer backup --project-root <path> --reason <text>
+codex-writer backup list --project-root <path>
+codex-writer backup verify --project-root <path> --backup-id <id>
 codex-writer restore --project-root <path> --backup-id <id>
-codex-writer repair projections --project-root <path> --chapter N
-codex-writer repair index --project-root <path>
+codex-writer repair projections --project-root <path> --all
+codex-writer repair index --project-root <path> --from-commits
 codex-writer repair logs --project-root <path>
 ```
 
----
+`migrate` 会为旧项目补齐 v1.0 provider 配置文件模板，但不会写入 API Key。
 
-## agents / route-test / run-agent
+## Agents
 
 ```bash
 codex-writer agents --project-root <path>
@@ -177,117 +117,28 @@ codex-writer route-test --project-root <path> --agent <name> [--input-kind <kind
 codex-writer run-agent --project-root <path> --agent <name> [--mock-output <json>]
 ```
 
-生产写作最小路由示例：
+生产写作的最小路由：
 
 ```json
 {
   "routes": {
     "planning_agent": {"provider": "openai_compatible", "model": "writer-model"},
-    "draft_agent": {"provider": "openai_compatible", "model": "writer-model"}
+    "draft_agent": {"provider": "openai_compatible", "model": "writer-model"},
+    "extract_agent": {"provider": "openai_compatible", "model": "writer-model"}
   }
 }
 ```
 
----
-
-## references search
+## Knowledge And Dashboard
 
 ```bash
 codex-writer references search --project-root <path> --query <text>
-```
-
-本地 BM25 检索 references 知识库（`references/` 下的 md 和 CSV）。
-
----
-
-## genres
-
-```bash
 codex-writer genres list
 codex-writer genres show --genre 玄幻
-```
-
-查看中文网文题材模板。v0.6 内置玄幻、都市脑洞、规则怪谈、狗血言情、古言、现实题材 6 个模板。模板只提供章节规划、审查重点和路由提示，不会绕过写作主链。
-
----
-
-## memory
-
-```bash
 codex-writer memory stats --project-root <path>
 codex-writer memory query --project-root <path> --tag <tag>
-codex-writer memory bootstrap --project-root <path>
-codex-writer memory dump --project-root <path>
-codex-writer memory conflicts --project-root <path>
-codex-writer memory update --project-root <path> --id <entry-id> --status archived
-```
-
-管理长期记忆 scratchpad。`stats` 查看记忆统计。`query` 按标签检索记忆条目。`bootstrap` 从旧 `memory.json` 迁移数据。`dump` 导出完整 scratchpad。`conflicts` 检测同一实体同一字段的语义事实冲突。`update` 修改单条记忆状态、内容或标签。
-
----
-
-## reading-power
-
-```bash
 codex-writer reading-power status --project-root <path>
-codex-writer reading-power debts --project-root <path>
+codex-writer dashboard --project-root <path> --format json|text|html
 ```
 
-追读力管理。`status` 查看债务概览（开放/兑现/过期）。`debts` 列出当前开放的读者期待。
-
----
-
-## learn
-
-```bash
-codex-writer learn "<内容>" --project-root <path> [--tag <tag>] [--chapter <N>]
-```
-
-沉淀作者写作经验到长期记忆 scratchpad。可指定标签（如 character/world_building/plot）和关联章节。
-
----
-
-## backup (增强)
-
-```bash
-codex-writer backup list --project-root <path>
-codex-writer backup verify --project-root <path> --backup-id <id>
-```
-
-`list` 列出所有备份及原因。`verify` 校验指定备份的 sha256 完整性。
-
----
-
-## repair (增强)
-
-```bash
-codex-writer repair projections --project-root <path> --all
-codex-writer repair index --project-root <path> --from-commits
-```
-
-`repair projections --all` 遍历所有 commits 批量重建投影。`repair index --from-commits` 从提交文件重建 SQLite 索引。
-
----
-
-## status (增强)
-
-```bash
-codex-writer status --project-root <path> --focus memory|rag
-```
-
-`--focus memory` 附加展示记忆数据。`--focus rag` 附加展示当前 RAG 模式。
-
----
-
-## dashboard
-
-```bash
-codex-writer dashboard --project-root <path> [--format json|text|html]
-codex-writer dashboard --project-root <path> --format html [--output exports/dashboard.html]
-```
-
-一站式只读观测面板。整合项目概况、章节网格、审查摘要、记忆统计、追读力仪表、事件链、开放伏笔、实体与关系投影。
-
-- `json`：稳定机器输出，供自动化或未来前端读取。
-- `text`：终端可读输出。
-- `html`：生成 Codex 风格高保真本地页面。默认写入 `.codex-writer/dashboard/index.html`，可通过 `--output` 指定项目内相对路径。
+Dashboard 是只读观测面，不承担正文编辑器职责。

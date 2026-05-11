@@ -79,6 +79,10 @@ def agent_router_path(project_root: Path) -> Path:
     return resolve_in_project(project_root, ".codex-writer/agents/子Agent路由.json")
 
 
+def provider_config_path(project_root: Path) -> Path:
+    return resolve_in_project(project_root, ".codex-writer/agents/模型供应商.json")
+
+
 def agent_run_dir(project_root: Path) -> Path:
     return resolve_in_project(project_root, ".codex-writer/agents/运行记录")
 

@@ -16,6 +16,7 @@ from codex_writer.story.contracts import (
     create_initial_memory_json,
     create_initial_anti_ai_feedback,
     create_agent_router_json,
+    create_provider_config_json,
     create_provider_example_json,
 )
 from codex_writer.story.placeholders import scan_chapter_placeholders, scan_user_files_placeholders
@@ -30,6 +31,10 @@ def output_json(command: str, ok: bool = True, data: dict | None = None,
     def _redact(obj, key: str = ""):
         key_l = key.lower()
         if any(k in key_l for k in sensitive_keys):
+            if key_l.endswith("_env"):
+                return obj
+            if isinstance(obj, (bool, int, float)) or obj is None:
+                return obj
             if isinstance(obj, str):
                 return redact_secret(obj)
             if obj:
@@ -95,6 +100,84 @@ def _provider_failure_errors(result: dict, empty_message: str) -> list[dict]:
     return []
 
 
+def _is_demo(args) -> bool:
+    return bool(getattr(args, "demo", False))
+
+
+def _is_production(args) -> bool:
+    return not _is_demo(args)
+
+
+def _validate_external_extraction(candidate: dict, chapter: int) -> list[dict]:
+    from codex_writer.extraction.schemas import validate_extraction_result
+
+    if not isinstance(candidate, dict) or not candidate:
+        return [{
+            "code": "INVALID_PROVIDER_OUTPUT",
+            "message": "extract_agent must return a non-empty JSON extraction result",
+            "blocking": True,
+        }]
+    errors = validate_extraction_result(candidate)
+    if candidate.get("chapter") != chapter:
+        errors.append(f"chapter must match requested chapter: {chapter}")
+    return [{"code": "INVALID_PROVIDER_OUTPUT", "message": e, "blocking": True} for e in errors]
+
+
+def _external_extract_chapter(project_root: Path, chapter: int, title: str, brief: dict,
+                              chapter_text: str) -> dict:
+    from codex_writer.agents.execution import payload_chars, resolve_agent_provider
+
+    payload = {
+        "chapter": chapter,
+        "title": title,
+        "brief": brief,
+        "chapter_text": chapter_text,
+        "required_schema": "codex-writer/extraction-result/v1",
+        "instruction": (
+            "Return only a JSON object that matches codex-writer/extraction-result/v1. "
+            "Do not include markdown fences unless they wrap valid JSON."
+        ),
+    }
+    resolution = resolve_agent_provider(
+        project_root,
+        "extract_agent",
+        require_external=True,
+        input_kind="context_pack",
+        input_chars=payload_chars(payload),
+    )
+    if resolution["errors"]:
+        return {"ok": False, "exit_code": resolution["exit_code"], "errors": resolution["errors"]}
+
+    input_text = json.dumps(payload, ensure_ascii=False)
+    result = resolution["provider_obj"].generate({
+        "system_prompt": "extract_agent: extract story state, events, scenes, and summary as strict JSON.",
+        "task_prompt": input_text,
+        "temperature": 0.2,
+    })
+    errors = _provider_failure_errors(result, "extract_agent returned no JSON")
+    if not errors and not result.get("json"):
+        errors = [{
+            "code": "INVALID_PROVIDER_OUTPUT",
+            "message": "extract_agent must return a JSON extraction result",
+            "blocking": True,
+        }]
+    if not errors:
+        errors = _validate_external_extraction(result["json"], chapter)
+    if errors:
+        return {"ok": False, "exit_code": 5, "errors": errors, "raw_result": result}
+
+    return {
+        "ok": True,
+        "exit_code": 0,
+        "result": result["json"],
+        "provider": resolution["provider"],
+        "model": resolution["model"],
+        "usage": result.get("usage", {}),
+        "input_text": input_text,
+        "output_text": result.get("text", ""),
+    }
+
+
 def cmd_init(args):
     project_root = Path(args.project_root).resolve()
     cw = project_root / ".codex-writer"
@@ -116,6 +199,7 @@ def cmd_init(args):
         write_json_atomic(cw / "story" / "反AI反馈.json", [])
         write_json_atomic(cw / "story" / "volumes" / "第001卷合同.json", create_volume_contract(1))
         write_json_atomic(cw / "agents" / "子Agent路由.json", create_agent_router_json())
+        write_json_atomic(cw / "agents" / "模型供应商.json", create_provider_config_json())
         write_json_atomic(cw / "agents" / "模型供应商.example.json", create_provider_example_json())
         write_json_atomic(cw / "migrations" / "applied.json", [])
         try:
@@ -140,8 +224,37 @@ def cmd_doctor(args):
     from codex_writer.story.placeholders import scan_chapter_placeholders, scan_user_files_placeholders
 
     if args.self_check:
-        output_json("doctor", data={"self_check": True})
-        return 0
+        from codex_writer import __version__
+
+        repo_root = Path(__file__).resolve().parents[1]
+        errors = []
+        pyproject = repo_root / "pyproject.toml"
+        plugin = repo_root / ".codex-plugin" / "plugin.json"
+        expected_version = "1.0.0"
+        if __version__ != expected_version:
+            errors.append({"code": "VERSION_MISMATCH", "message": f"package version is {__version__}", "blocking": True})
+        if pyproject.exists() and f'version = "{expected_version}"' not in pyproject.read_text(encoding="utf-8"):
+            errors.append({"code": "VERSION_MISMATCH", "message": "pyproject version mismatch", "blocking": True})
+        if plugin.exists():
+            try:
+                plugin_data = json.loads(plugin.read_text(encoding="utf-8"))
+                if plugin_data.get("version") != expected_version:
+                    errors.append({"code": "VERSION_MISMATCH", "message": "plugin manifest version mismatch", "blocking": True})
+            except Exception:
+                errors.append({"code": "PLUGIN_MANIFEST_INVALID", "message": "plugin manifest is not valid JSON", "blocking": True})
+        release_files = [
+            repo_root / "README.md",
+            repo_root / "pyproject.toml",
+            repo_root / "docs" / "guides" / "commands.md",
+            repo_root / "docs" / "guides" / "public-beta.md",
+            repo_root / "docs" / "releases" / "v1.0.md",
+        ]
+        release_files.extend((repo_root / "skills").glob("*/SKILL.md"))
+        for path in release_files:
+            if path.exists() and "MVP" in path.read_text(encoding="utf-8"):
+                errors.append({"code": "MVP_COPY_RESIDUE", "message": f"MVP copy residue in {path.name}", "blocking": True})
+        output_json("doctor", ok=not errors, data={"self_check": True, "version": __version__}, errors=errors)
+        return 0 if not errors else 3
 
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter) if args.chapter is not None else None
@@ -176,6 +289,32 @@ def cmd_doctor(args):
                 "code": "PLACEHOLDER_FOUND",
                 "message": f"发现占位符: {f['text']} (第{f['line']}行, {f.get('file', 'unknown')})",
                 "blocking": True
+            })
+
+    if args.strict:
+        from codex_writer.agents.provider_config import PRODUCTION_AGENT_NAMES
+        from codex_writer.agents.providers import OPENAI_COMPATIBLE
+        from codex_writer.agents.router import load_project_router
+        from codex_writer.core.paths import provider_config_path
+
+        if not provider_config_path(project_root).exists():
+            errors.append({
+                "code": "PROVIDER_CONFIG_MISSING",
+                "message": "生产模型供应商配置文件缺失，请运行 provider configure 或 migrate",
+                "blocking": True,
+            })
+        router = load_project_router(project_root)
+        routes = router.get("routes", {})
+        missing_routes = [
+            agent for agent in PRODUCTION_AGENT_NAMES
+            if routes.get(agent, {}).get("provider") != OPENAI_COMPATIBLE
+        ]
+        if missing_routes:
+            errors.append({
+                "code": "PRODUCTION_ROUTE_INCOMPLETE",
+                "message": "生产链路必须将 planning_agent、draft_agent、extract_agent 路由到外部 provider",
+                "blocking": True,
+                "agents": missing_routes,
             })
 
     if errors:
@@ -242,7 +381,8 @@ def cmd_plan(args):
     except ImportError:
         pass
 
-    if args.production:
+    production = _is_production(args)
+    if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
         from codex_writer.agents.agents import write_agent_run
 
@@ -301,12 +441,12 @@ def cmd_plan(args):
         }, input_text=json.dumps(payload, ensure_ascii=False), output_text=result.get("text", ""))
 
     if args.dry_run:
-        output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "dry_run": True, "production": bool(args.production)}, project_root=str(project_root))
+        output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "dry_run": True, "production": production}, project_root=str(project_root))
         return 0
 
     path = project_root / ".codex-writer" / "story" / "chapters" / f"第{chapter:04d}章任务书.json"
     write_json_atomic(path, brief)
-    output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "production": bool(args.production)}, project_root=str(project_root))
+    output_json("plan", data={"chapter": chapter, "title": brief_title, "suggestions": suggestions, "production": production}, project_root=str(project_root))
     return 0
 
 
@@ -329,9 +469,9 @@ def cmd_context(args):
 def cmd_write(args):
     from pathlib import Path
     from datetime import datetime, timezone
-    from codex_writer.core.io import write_markdown_atomic, read_json
+    from codex_writer.core.io import write_json_atomic, write_markdown_atomic, read_json
     from codex_writer.core.workflow import log_workflow
-    from codex_writer.core.paths import chapter_brief_path, chapter_md_path
+    from codex_writer.core.paths import chapter_brief_path, chapter_md_path, extraction_result_path
     from codex_writer.review.pipeline import run_review
     from codex_writer.review.anti_ai import append_anti_ai_feedback
     from codex_writer.extraction.extractor import extract_from_chapter
@@ -346,6 +486,7 @@ def cmd_write(args):
     run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     warnings = []
     errors = []
+    production = _is_production(args)
 
     log_workflow(project_root, run_id, chapter, "planned", "context_ready", "workflow", "")
 
@@ -377,7 +518,7 @@ def cmd_write(args):
     draft_model = "default"
     draft_usage = {}
     draft_input_text = ""
-    if args.production:
+    if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
 
         context_pack = {}
@@ -458,13 +599,33 @@ def cmd_write(args):
     })
 
     log_workflow(project_root, run_id, chapter, "polished", "extracted", "extract_agent", "")
-    extract_result = extract_from_chapter(project_root, chapter)
+    extract_provider = "codex"
+    extract_model = "default"
+    extract_usage = {}
+    extract_input_text = ""
+    extract_output_text = ""
+    if production:
+        extraction = _external_extract_chapter(project_root, chapter, title, brief, draft_text)
+        if not extraction["ok"]:
+            errors.extend(extraction["errors"])
+            log_workflow(project_root, run_id, chapter, "polished", "blocked", "extract_agent", "")
+            output_json("write", ok=False, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
+            return extraction["exit_code"]
+        extract_result = extraction["result"]
+        write_json_atomic(extraction_result_path(project_root, chapter), extract_result)
+        extract_provider = extraction["provider"]
+        extract_model = extraction["model"]
+        extract_usage = extraction["usage"]
+        extract_input_text = extraction["input_text"]
+        extract_output_text = extraction["output_text"]
+    else:
+        extract_result = extract_from_chapter(project_root, chapter)
     write_agent_run(project_root, {
         "task_id": f"ch{chapter:04d}-extract_agent-run_{run_id}",
         "run_id": run_id, "chapter": chapter,
-        "agent": "extract_agent", "provider": "codex", "model": "default",
-        "status": "completed", "input_refs": [], "usage": {}, "errors": []
-    })
+        "agent": "extract_agent", "provider": extract_provider, "model": extract_model,
+        "status": "completed", "input_refs": [], "usage": extract_usage, "errors": []
+    }, input_text=extract_input_text, output_text=extract_output_text)
 
     log_workflow(project_root, run_id, chapter, "extracted", "committed", "commit", "")
     commit = commit_chapter(project_root, chapter, no_backup=args.no_backup)
@@ -496,9 +657,11 @@ def cmd_write(args):
         "status": commit["meta"]["status"],
         "word_count": chapter_text_word_count(project_root, chapter, commit.get("summary_text", "")),
         "run_id": run_id,
-        "production": bool(args.production),
+        "production": production,
         "draft_provider": draft_provider,
-        "draft_model": draft_model
+        "draft_model": draft_model,
+        "extract_provider": extract_provider,
+        "extract_model": extract_model
     }, project_root=str(project_root), run_id=run_id, warnings=warnings)
     return 0
 
@@ -523,15 +686,36 @@ def cmd_extract(args):
     from pathlib import Path
     from codex_writer.extraction.extractor import extract_from_chapter
     from codex_writer.extraction.schemas import validate_extraction_result
+    from codex_writer.core.io import read_json, write_json_atomic
+    from codex_writer.core.paths import chapter_brief_path, chapter_md_path, extraction_result_path
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter)
-    result = extract_from_chapter(project_root, chapter)
+    if _is_production(args):
+        brief = {}
+        brief_path = chapter_brief_path(project_root, chapter)
+        if brief_path.exists():
+            brief = read_json(brief_path)
+        title = brief.get("title", "")
+        md_path = chapter_md_path(project_root, chapter, title)
+        chapter_text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+        extraction = _external_extract_chapter(project_root, chapter, title, brief, chapter_text)
+        if not extraction["ok"]:
+            output_json("extract", ok=False, project_root=str(project_root), errors=extraction["errors"])
+            return extraction["exit_code"]
+        result = extraction["result"]
+        write_json_atomic(extraction_result_path(project_root, chapter), result)
+    else:
+        result = extract_from_chapter(project_root, chapter)
     errors = validate_extraction_result(result)
     if errors:
         output_json("extract", ok=False, project_root=str(project_root),
                     errors=[{"code": "SCHEMA_VALIDATION_FAILED", "message": e, "blocking": True} for e in errors])
         return 2
-    output_json("extract", data={"chapter": chapter, "summary_text": result["summary_text"]}, project_root=str(project_root))
+    output_json("extract", data={
+        "chapter": chapter,
+        "summary_text": result["summary_text"],
+        "production": _is_production(args),
+    }, project_root=str(project_root))
     return 0
 
 
@@ -661,9 +845,11 @@ def cmd_events(args):
 
 def cmd_migrate(args):
     from pathlib import Path
+    from codex_writer.agents.provider_config import ensure_provider_config
     from codex_writer.storage.migrations import migrate
     project_root = Path(args.project_root).resolve()
     migrate(project_root)
+    ensure_provider_config(project_root)
     output_json("migrate", data={"migrated": True}, project_root=str(project_root))
     return 0
 
@@ -808,6 +994,93 @@ def cmd_agents(args):
     return 0
 
 
+def cmd_provider(args):
+    from pathlib import Path
+    from codex_writer.agents.provider_config import (
+        OPENAI_COMPATIBLE_API_KEY_ENV,
+        provider_presets_public,
+        public_runtime_status,
+        resolve_openai_compatible_options,
+        save_provider_config,
+    )
+    from codex_writer.agents.providers import OPENAI_COMPATIBLE, create_provider, provider_config_errors
+    from codex_writer.core.config import load_settings
+
+    project_root = Path(args.project_root).resolve()
+    sub = getattr(args, "provider_subcommand", "") or ""
+    if sub == "presets":
+        output_json("provider", data={"presets": provider_presets_public()}, project_root=str(project_root))
+        return 0
+    if sub == "configure":
+        try:
+            config = save_provider_config(
+                project_root,
+                preset=args.preset,
+                base_url=args.base_url or "",
+                model=args.model or "",
+                timeout=args.timeout,
+                max_tokens=args.max_tokens,
+            )
+        except ValueError as exc:
+            output_json("provider", ok=False, project_root=str(project_root),
+                        errors=[{"code": "INVALID_PROVIDER_PRESET", "message": str(exc), "blocking": True}])
+            return 2
+        output_json("provider", data={
+            "provider": config["provider"],
+            "api_key_env": OPENAI_COMPATIBLE_API_KEY_ENV,
+            "production_agents": ["planning_agent", "draft_agent", "extract_agent"],
+        }, project_root=str(project_root))
+        return 0
+    if sub == "status":
+        output_json("provider", data={"provider": public_runtime_status(project_root)}, project_root=str(project_root))
+        return 0
+    if sub == "test":
+        settings = load_settings()
+        options = resolve_openai_compatible_options(
+            project_root,
+            cli_overrides={
+                "preset": args.preset or "",
+                "base_url": args.base_url or "",
+                "model": args.model or "",
+                "timeout": args.timeout,
+                "max_tokens": args.max_tokens,
+            },
+            settings=settings,
+        )
+        errors = provider_config_errors(
+            OPENAI_COMPATIBLE,
+            settings,
+            options["model"],
+            base_url=options["base_url"],
+            api_key=options["api_key"],
+        )
+        if errors:
+            output_json("provider", ok=False, project_root=str(project_root),
+                        data={"provider": public_runtime_status(project_root)}, errors=errors)
+            return 5
+        provider = create_provider(OPENAI_COMPATIBLE, model=options["model"], settings=settings, provider_options=options)
+        result = provider.generate({
+            "system_prompt": "Codex Writer provider health check.",
+            "task_prompt": "Reply with the word OK.",
+            "temperature": 0.0,
+            "max_tokens": min(int(options.get("max_tokens") or 64), 64),
+        })
+        errors = _provider_failure_errors(result, "Provider returned empty health-check output")
+        if errors:
+            output_json("provider", ok=False, project_root=str(project_root),
+                        data={"provider": public_runtime_status(project_root)}, errors=errors)
+            return 5
+        output_json("provider", data={
+            "provider": public_runtime_status(project_root),
+            "response_preview": result.get("text", "")[:80],
+            "usage": result.get("usage", {}),
+        }, project_root=str(project_root))
+        return 0
+    output_json("provider", ok=False, project_root=str(project_root),
+                errors=[{"code": "INVALID_SUBCOMMAND", "message": "Use: provider presets|configure|status|test", "blocking": True}])
+    return 2
+
+
 def cmd_route_test(args):
     from pathlib import Path
     from codex_writer.agents.router import load_project_router, route_agent
@@ -848,7 +1121,7 @@ def cmd_preflight(args):
         health["projection_details"] = proj_health
     errors = []
     exit_code = 0 if health["mainline_ready"] else 3
-    if args.production:
+    if _is_production(args):
         from codex_writer.agents.execution import production_preflight
         production = production_preflight(project_root)
         health["production"] = production
@@ -1160,6 +1433,7 @@ def _register_subparsers(subparsers):
     sp_plan.add_argument("--chapter", type=str, default="1")
     sp_plan.add_argument("--title", type=str, default="")
     sp_plan.add_argument("--production", action="store_true")
+    sp_plan.add_argument("--demo", action="store_true")
     sp_plan.add_argument("--dry-run", action="store_true")
     sp_plan.add_argument("--format", type=str, default="text")
 
@@ -1172,6 +1446,7 @@ def _register_subparsers(subparsers):
     sp_write.add_argument("--project-root", type=str, default=".")
     sp_write.add_argument("--chapter", type=str, default="1")
     sp_write.add_argument("--production", action="store_true")
+    sp_write.add_argument("--demo", action="store_true")
     sp_write.add_argument("--no-backup", action="store_true")
     sp_write.add_argument("--format", type=str, default="text")
 
@@ -1183,6 +1458,8 @@ def _register_subparsers(subparsers):
     sp_extract = subparsers.add_parser("extract", help="抽取章节事实")
     sp_extract.add_argument("--project-root", type=str, default=".")
     sp_extract.add_argument("--chapter", type=str, default="1")
+    sp_extract.add_argument("--production", action="store_true")
+    sp_extract.add_argument("--demo", action="store_true")
     sp_extract.add_argument("--format", type=str, default="text")
 
     sp_commit = subparsers.add_parser("commit", help="生成并应用章节提交")
@@ -1243,6 +1520,31 @@ def _register_subparsers(subparsers):
     sp_agents.add_argument("--project-root", type=str, default=".")
     sp_agents.add_argument("--format", type=str, default="text")
 
+    sp_provider = subparsers.add_parser("provider", help="配置和测试 OpenAI-compatible 模型供应商")
+    sp_provider.add_argument("--project-root", type=str, default=".")
+    sp_provider.add_argument("--format", type=str, default="text")
+    sub_provider = sp_provider.add_subparsers(dest="provider_subcommand")
+    sp_provider_presets = sub_provider.add_parser("presets")
+    sp_provider_presets.add_argument("--project-root", type=str, default=".")
+    sp_provider_presets.add_argument("--format", type=str, default="text")
+    sp_provider_configure = sub_provider.add_parser("configure")
+    sp_provider_configure.add_argument("--preset", type=str, required=True, choices=["openai", "deepseek", "qwen", "custom"])
+    sp_provider_configure.add_argument("--base-url", type=str, default="")
+    sp_provider_configure.add_argument("--model", type=str, required=True)
+    sp_provider_configure.add_argument("--timeout", type=float, default=None)
+    sp_provider_configure.add_argument("--max-tokens", type=int, default=None)
+    sp_provider_configure.add_argument("--format", type=str, default="text")
+    sp_provider_status = sub_provider.add_parser("status")
+    sp_provider_status.add_argument("--project-root", type=str, default=".")
+    sp_provider_status.add_argument("--format", type=str, default="text")
+    sp_provider_test = sub_provider.add_parser("test")
+    sp_provider_test.add_argument("--preset", type=str, default="")
+    sp_provider_test.add_argument("--base-url", type=str, default="")
+    sp_provider_test.add_argument("--model", type=str, default="")
+    sp_provider_test.add_argument("--timeout", type=float, default=None)
+    sp_provider_test.add_argument("--max-tokens", type=int, default=None)
+    sp_provider_test.add_argument("--format", type=str, default="text")
+
     sp_route_test = subparsers.add_parser("route-test", help="测试某类任务会路由到哪个 Agent 和模型")
     sp_route_test.add_argument("--project-root", type=str, default=".")
     sp_route_test.add_argument("--agent", type=str, required=True)
@@ -1261,6 +1563,7 @@ def _register_subparsers(subparsers):
     sp_preflight.add_argument("--project-root", type=str, default=".")
     sp_preflight.add_argument("--chapter", type=str, default=None)
     sp_preflight.add_argument("--production", action="store_true")
+    sp_preflight.add_argument("--demo", action="store_true")
     sp_preflight.add_argument("--format", type=str, default="text")
 
     sp_genres = subparsers.add_parser("genres", help="查看和应用中文网文题材模板")
@@ -1332,7 +1635,7 @@ def _register_subparsers(subparsers):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="codex-writer", description="Codex Writer MVP CLI")
+    parser = argparse.ArgumentParser(prog="codex-writer", description="Codex Writer CLI")
     subparsers = parser.add_subparsers(dest="command")
     _register_subparsers(subparsers)
 
@@ -1361,6 +1664,7 @@ def main(argv=None):
         "restore": cmd_restore,
         "repair": cmd_repair,
         "agents": cmd_agents,
+        "provider": cmd_provider,
         "route-test": cmd_route_test,
         "run-agent": cmd_run_agent,
         "preflight": cmd_preflight,
