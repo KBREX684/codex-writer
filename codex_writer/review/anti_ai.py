@@ -73,10 +73,9 @@ def append_anti_ai_feedback(project_root: Path, issues: list, current_chapter: i
     active_items = [i for i in feedback if i.get("status") == "active"]
     if len(active_items) > _MAX_ACTIVE:
         active_items.sort(key=lambda x: x.get("last_seen_chapter") or x.get("source_chapter", 0))
-        to_archive = active_items[: len(active_items) - _MAX_ACTIVE]
-        archive_ids = {id(i) for i in to_archive}
+        to_archive_ids = {i.get("id") for i in active_items[: len(active_items) - _MAX_ACTIVE] if i.get("id")}
         for item in feedback:
-            if id(item) in archive_ids:
+            if item.get("id") in to_archive_ids:
                 item["status"] = "archived"
                 item.setdefault("archived_at", datetime.now(timezone.utc).isoformat())
 

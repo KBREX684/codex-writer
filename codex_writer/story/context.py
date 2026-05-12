@@ -77,6 +77,9 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
         pack["sources"].append(".codex-writer/memory.json")
 
     # Load recent chapter summaries — respect CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL.
+    # Iterate from offset=1 (immediately preceding chapter) outward; the resulting
+    # list is already in most-recent-first order which is the intended order for the
+    # model (most relevant context first).
     context_window = _max_context_chapters()
     summaries_added = []
     for offset in range(1, context_window + 1):
@@ -90,7 +93,6 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
                 "text": prev_summary_path.read_text(encoding="utf-8"),
             })
             pack["sources"].append(f".codex-writer/summaries/第{prev_ch:04d}章.md")
-    # Most-recent first so the model reads them in reverse-chronological order.
     pack["recent_summaries"] = summaries_added
 
     # Anti-AI feedback: send only the most recent _MAX_ANTI_AI_ITEMS active items

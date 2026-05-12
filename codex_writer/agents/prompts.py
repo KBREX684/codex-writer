@@ -148,16 +148,24 @@ def _genre_addendum(genre: str) -> str:
         return ""
 
 
+def _extract_genre(payload: dict) -> str:
+    """Look up the genre from the payload, checking multiple possible locations."""
+    if payload.get("genre"):
+        return payload["genre"]
+    story_contract = payload.get("story_contract") or {}
+    if story_contract.get("genre"):
+        return story_contract["genre"]
+    chapter_brief = payload.get("chapter_brief") or {}
+    return chapter_brief.get("genre") or ""
+
+
 def build_agent_prompt(agent: str, payload: dict) -> dict:
     """Build a system+task prompt pair for the given agent.
 
     ``payload`` may contain a ``genre`` key to activate genre-specific
     addenda for *planning_agent* and *draft_agent*.
     """
-    genre = payload.get("genre") or (
-        (payload.get("story_contract") or {}).get("genre") or
-        (payload.get("chapter_brief") or {}).get("genre") or ""
-    )
+    genre = _extract_genre(payload)
 
     base_system = _AGENT_PROMPTS.get(
         agent,

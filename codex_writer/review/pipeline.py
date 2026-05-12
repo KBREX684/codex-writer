@@ -276,7 +276,7 @@ def _check_setting_consistency(project_root: Path, text: str, chapter: int) -> l
     violation_markers = ["违反", "打破", "无视", "推翻", "取消", "改变了", "不再", "已不"]
     sentences = re.split(r"[。！？\n]", text)
 
-    for rule_line in rule_lines[:30]:  # limit to first 30 rules to avoid O(n²) blowup
+    for rule_line in rule_lines[:30]:  # cap rule iterations to avoid excessive per-sentence checks
         rule_keywords = set(rule_line[i:i + 2] for i in range(len(rule_line) - 1))
         if len(rule_keywords) < 2:
             continue
