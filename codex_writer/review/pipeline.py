@@ -336,6 +336,7 @@ def _check_character_consistency(project_root: Path, text: str, chapter: int) ->
                 continue
 
             # Check within a local window around each character name occurrence
+            conflict_found = False
             for match in re.finditer(re.escape(char_name), text):
                 window_start = max(0, match.start() - 100)
                 window_end = min(len(text), match.end() + 100)
@@ -352,7 +353,10 @@ def _check_character_consistency(project_root: Path, text: str, chapter: int) ->
                             "blocking": False,
                             "chapter": chapter,
                         })
+                        conflict_found = True
                         break  # one report per character per run
+                if conflict_found:
+                    break
 
     except (ImportError, OSError):
         pass

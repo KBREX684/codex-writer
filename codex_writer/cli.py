@@ -126,6 +126,7 @@ def _validate_external_extraction(candidate: dict, chapter: int) -> list[dict]:
 def _external_extract_chapter(project_root: Path, chapter: int, title: str, brief: dict,
                               chapter_text: str) -> dict:
     from codex_writer.agents.execution import payload_chars, resolve_agent_provider
+    from codex_writer.agents.prompts import build_agent_prompt
 
     payload = {
         "chapter": chapter,
@@ -148,9 +149,10 @@ def _external_extract_chapter(project_root: Path, chapter: int, title: str, brie
     if resolution["errors"]:
         return {"ok": False, "exit_code": resolution["exit_code"], "errors": resolution["errors"]}
 
+    prompt = build_agent_prompt("extract_agent", payload)
     input_text = json.dumps(payload, ensure_ascii=False)
     result = resolution["provider_obj"].generate({
-        "system_prompt": "extract_agent: extract story state, events, scenes, and summary as strict JSON.",
+        "system_prompt": prompt["system_prompt"],
         "task_prompt": input_text,
         "temperature": 0.2,
     })
@@ -389,6 +391,7 @@ def _external_create_bible(args, project_root: Path, title: str, genre: str) -> 
     payload = {
         "task": "create_complete_million_word_novel_bible_before_chapter_one",
         "required_schema": "codex-writer/novel-bible/v1",
+        "genre": genre,
         "book": {"title": title, "genre": genre},
         "target_scale": {
             "target_words": int(args.target_words),
@@ -417,12 +420,11 @@ def _external_create_bible(args, project_root: Path, title: str, genre: str) -> 
     if resolution["errors"]:
         return {"ok": False, "exit_code": resolution["exit_code"], "errors": resolution["errors"]}
 
+    from codex_writer.agents.prompts import build_agent_prompt
+    prompt = build_agent_prompt("bible_planning_agent", payload)
     input_text = json.dumps(payload, ensure_ascii=False)
     result = resolution["provider_obj"].generate({
-        "system_prompt": (
-            "planning_agent: create a complete codex-writer/novel-bible/v1 "
-            "for a million-word Chinese webnovel. Return strict JSON only."
-        ),
+        "system_prompt": prompt["system_prompt"],
         "task_prompt": input_text,
         "temperature": 0.35,
     })
@@ -654,6 +656,7 @@ def cmd_plan(args):
     if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
         from codex_writer.agents.agents import write_agent_run
+        from codex_writer.agents.prompts import build_agent_prompt
         from codex_writer.core.paths import story_contract_path
         from codex_writer.story.bible import load_novel_bible
 
@@ -687,7 +690,7 @@ def cmd_plan(args):
             return resolution["exit_code"]
 
         result = resolution["provider_obj"].generate({
-            "system_prompt": "planning_agent: create a production chapter brief as strict JSON.",
+            "system_prompt": build_agent_prompt("planning_agent", payload)["system_prompt"],
             "task_prompt": json.dumps(payload, ensure_ascii=False),
             "temperature": 0.4,
         })
@@ -817,6 +820,7 @@ def cmd_write(args):
     draft_input_text = ""
     if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
+        from codex_writer.agents.prompts import build_agent_prompt
 
         context_pack = {}
         context_path = context_pack_path
@@ -829,6 +833,9 @@ def cmd_write(args):
             "chapter": chapter,
             "title": title,
             "brief": brief,
+            # Expose story_contract at the top level so build_agent_prompt can
+            # extract the genre for genre-specific addenda.
+            "story_contract": context_pack.get("story_contract") or {},
             "context_pack": context_pack,
             "instruction": "Return polished chapter prose as markdown text. Do not return JSON.",
         }
@@ -846,7 +853,7 @@ def cmd_write(args):
             return resolution["exit_code"]
         draft_input_text = json.dumps(payload, ensure_ascii=False)
         result = resolution["provider_obj"].generate({
-            "system_prompt": "draft_agent: write the chapter prose. Return only markdown prose.",
+            "system_prompt": build_agent_prompt("draft_agent", payload)["system_prompt"],
             "task_prompt": draft_input_text,
             "temperature": 0.75,
         })
