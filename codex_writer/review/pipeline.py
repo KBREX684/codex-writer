@@ -8,28 +8,117 @@ PACING_LONG_PARAGRAPH = 300
 PACING_MIN_DIALOGUE_RATIO = 0.15
 COOL_POINT_MIN_TEXT_LEN = 20
 
-AI_FLAVOR_PATTERNS = [
-    "命运的齿轮",
-    "然而，",
-    "值得注意的是",
-    "总的来说",
-    "在某种程度上",
-    "深吸一口气",
-    "不禁",
-    "众所周知",
-    "毋庸置疑",
+# Context window (chars) around an AI-flavor match used to report evidence.
+_AI_FLAVOR_CONTEXT = 40
+
+# ── AI 腔模式：(字符串精确匹配, 说明) ─────────────────────────────────────────
+# 每一项是 (pattern, description, context_required)
+# context_required=True 表示仅当该词独立成句或在非引号环境中才报告
+_AI_FLAVOR_ENTRIES: list[tuple[str, str, bool]] = [
+    # 经典 AI 句式
+    ("命运的齿轮", "AI 模板：「命运的齿轮」", False),
+    ("值得注意的是", "AI 模板：「值得注意的是」", False),
+    ("总的来说", "AI 模板：「总的来说」", False),
+    ("在某种程度上", "AI 模板：「在某种程度上」", False),
+    ("众所周知", "AI 模板：「众所周知」", False),
+    ("毋庸置疑", "AI 模板：「毋庸置疑」", False),
+    ("深吸一口气", "AI 模板：「深吸一口气」（滥用过渡词）", False),
+    ("这时他意识到", "AI 模板：视角切换套话", False),
+    ("这时她意识到", "AI 模板：视角切换套话", False),
+    ("思绪万千", "AI 模板：情绪堆叠套话", False),
+    ("内心五味杂陈", "AI 模板：情绪堆叠套话", False),
+    ("令人窒息", "AI 模板：形容词堆叠", False),
+    ("不由得", "AI 模板：「不由得」（可改为直接动作）", False),
+    ("浮现在脑海", "AI 模板：「浮现在脑海」（可改为具体感官）", False),
+    ("心中一震", "AI 模板：「心中一震」（过度使用）", False),
+    ("不禁感叹", "AI 模板：「不禁感叹」", False),
+    ("此刻的他", "AI 模板：「此刻的他/她」（距离感叙述）", False),
+    ("此刻的她", "AI 模板：「此刻的她」", False),
+    ("下一章将会", "AI 元叙述：直接打破第四堵墙", False),
+    ("且听下回分解", "AI 元叙述：评书套语，现代网文不适用", False),
+    ("随着剧情的发展", "AI 元叙述：作者视角侵入", False),
+    ("读者们", "AI 元叙述：直接称呼读者", False),
+    # 「不禁」单独检查（上下文相关）
+    ("不禁", "AI 模板：「不禁」（频繁使用时显 AI 腔）", True),
+    # 「然而，」单独成段首才报告（上下文相关）
+    ("然而，", "AI 衔接：「然而，」独立段首（过度转折）", True),
 ]
+
+# 上下文相关 AI 腔：仅当出现在段落开头时才报告
+_PARAGRAPH_HEAD_PATTERNS = {"然而，"}
+# 全局出现超过此次数才报告（避免单次误伤）
+_AI_FLAVOR_REPEAT_THRESHOLD = {"不禁": 2}
 
 COOL_POINT_PATTERNS = [
-    r"(?:获得|得到|突破|晋升|踏入|升入|晋级|提升.{0,5}境界)",
+    r"(?:突破|晋升|踏入|升入|晋级|提升.{0,5}境界|境界.{0,5}突破)",
     r"(?:震惊|难以置信|目瞪口呆|不敢置信|倒吸一口凉气)",
     r"(?:身份|实力|秘密|真相).{0,10}(?:揭露|暴露|揭开|公布)",
-    r"(?:反转|逆转|突变|颠覆)",
-    r"(?:击败|碾压|秒杀|轻易.{0,5}战胜)",
+    r"(?:反转|逆转|颠覆).{0,15}(?:局面|预期|结果|命运|形势)",
+    r"(?:一击|一掌|一剑|一拳).{0,10}(?:击败|击倒|震退|碾压|秒杀)",
+    r"(?:打脸|狠狠.{0,5}回击|以牙还牙)",
+    r"(?:身份曝光|真实身份|隐藏实力)",
+]
+
+# 章末钩子检测：最后两段落至少有一段命中则认为有章末钩
+_CHAPTER_END_HOOK_PATTERNS = [
+    r"[？?！!…]{1,}",
+    r"(?:却不知|殊不知|谁也没想到)",
+    r"(?:忽然|突然|陡然).{0,20}(?:响起|出现|袭来|传来)",
+    r"(?:来不及|已经太迟|为时已晚)",
+    r"(?:危险|威胁|杀机).{0,10}(?:逼近|降临|显现)",
 ]
 
 
-def _check_cool_points(text: str) -> list[dict]:
+def _find_in_text_with_context(text: str, pattern: str, context_chars: int = _AI_FLAVOR_CONTEXT) -> list[str]:
+    """Return context snippets for all occurrences of *pattern* in *text*."""
+    results = []
+    start = 0
+    while True:
+        idx = text.find(pattern, start)
+        if idx == -1:
+            break
+        ctx_start = max(0, idx - context_chars)
+        ctx_end = min(len(text), idx + len(pattern) + context_chars)
+        results.append(text[ctx_start:ctx_end])
+        start = idx + 1
+    return results
+
+
+def _check_ai_flavor(text: str, chapter: int) -> list[dict]:
+    """Detect AI-flavor patterns with context-window matching."""
+    issues = []
+    paragraphs = [p.strip() for p in text.splitlines() if p.strip()]
+
+    for pattern, description, context_required in _AI_FLAVOR_ENTRIES:
+        occurrences = _find_in_text_with_context(text, pattern)
+        if not occurrences:
+            continue
+
+        # Context-required patterns: apply extra filters
+        if context_required and pattern in _PARAGRAPH_HEAD_PATTERNS:
+            head_count = sum(1 for para in paragraphs if para.startswith(pattern))
+            if head_count < 2:
+                continue
+
+        if context_required and pattern in _AI_FLAVOR_REPEAT_THRESHOLD:
+            if len(occurrences) < _AI_FLAVOR_REPEAT_THRESHOLD[pattern]:
+                continue
+
+        issues.append({
+            "severity": "low",
+            "category": "ai_flavor",
+            "location": f"发现模式: {pattern}（共 {len(occurrences)} 处）",
+            "description": description,
+            "evidence": pattern,
+            "fix_hint": f"改写该句式，使用更自然、更具体的表达。示例片段：「{occurrences[0][:60]}」",
+            "blocking": False,
+            "chapter": chapter,
+        })
+
+    return issues
+
+
+def _check_cool_points(text: str, chapter: int) -> list[dict]:
     issues = []
     matches = []
     for pattern in COOL_POINT_PATTERNS:
@@ -42,8 +131,7 @@ def _check_cool_points(text: str) -> list[dict]:
                 "context": text[start:end]
             })
 
-    word_count = len(text)
-    if word_count > 0 and len(matches) == 0:
+    if len(text) > COOL_POINT_MIN_TEXT_LEN and not matches:
         issues.append({
             "severity": "medium",
             "category": "logic",
@@ -52,13 +140,34 @@ def _check_cool_points(text: str) -> list[dict]:
             "evidence": "",
             "fix_hint": "在章节中插入一处兑现、反转、打脸或震惊事件",
             "blocking": False,
-            "chapter": 0
+            "chapter": chapter,
         })
 
     return issues
 
 
-def _check_pacing(text: str) -> list[dict]:
+def _check_chapter_end_hook(text: str, chapter: int) -> list[dict]:
+    """Warn if the chapter ending doesn't contain a suspense hook."""
+    if not text.strip():
+        return []
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    tail = "\n".join(paragraphs[-2:]) if len(paragraphs) >= 2 else paragraphs[-1] if paragraphs else ""
+    for pattern in _CHAPTER_END_HOOK_PATTERNS:
+        if re.search(pattern, tail):
+            return []
+    return [{
+        "severity": "medium",
+        "category": "logic",
+        "location": "章节结尾",
+        "description": "章末未检测到有效悬念钩子（疑问/意外/新威胁），可能影响追读率",
+        "evidence": tail[:80] if tail else "",
+        "fix_hint": "在最后一到两段加入未解疑问、突发事件或新的危机",
+        "blocking": False,
+        "chapter": chapter,
+    }]
+
+
+def _check_pacing(text: str, chapter: int) -> list[dict]:
     issues = []
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
 
@@ -75,7 +184,7 @@ def _check_pacing(text: str) -> list[dict]:
                     "evidence": para[:80],
                     "fix_hint": "拆分长段落或插入对话/场景切换",
                     "blocking": False,
-                    "chapter": 0
+                    "chapter": chapter,
                 })
                 break
         else:
@@ -83,7 +192,7 @@ def _check_pacing(text: str) -> list[dict]:
 
     dialogue_marks = ("\u201c", "\u2018", "\u300c", "\u300d", "\u300e", "\u300f")
     dialogue_lines = sum(1 for line in text.splitlines() if line.strip() and line.strip()[0] in dialogue_marks)
-    total_lines = max(len([l for l in text.splitlines() if l.strip()]), 1)
+    total_lines = max(len([ln for ln in text.splitlines() if ln.strip()]), 1)
     dialogue_ratio = dialogue_lines / total_lines
 
     if dialogue_ratio < PACING_MIN_DIALOGUE_RATIO:
@@ -95,7 +204,7 @@ def _check_pacing(text: str) -> list[dict]:
             "evidence": f"对话行数: {dialogue_lines}/{total_lines}",
             "fix_hint": "增加角色互动或内心独白，提高对话密度",
             "blocking": False,
-            "chapter": 0
+            "chapter": chapter,
         })
 
     return issues
@@ -118,12 +227,11 @@ def _check_continuity(project_root: Path, chapter: int, text: str) -> list[dict]
             "evidence": "",
             "fix_hint": "确保前一章已通过 commit 生成摘要",
             "blocking": False,
-            "chapter": 0
+            "chapter": chapter,
         })
         return issues
 
-    prev_text = prev_summary.read_text(encoding="utf-8", errors="replace")
-    if len(text) < COOL_POINT_MIN_TEXT_LEN and prev_text:
+    if len(text) < COOL_POINT_MIN_TEXT_LEN:
         issues.append({
             "severity": "high",
             "category": "continuity",
@@ -132,13 +240,20 @@ def _check_continuity(project_root: Path, chapter: int, text: str) -> list[dict]
             "evidence": "",
             "fix_hint": "确保本章与上一章有明确的情节承接",
             "blocking": False,
-            "chapter": 0
+            "chapter": chapter,
         })
 
     return issues
 
 
 def _check_setting_consistency(project_root: Path, text: str, chapter: int) -> list[dict]:
+    """Check whether the chapter text contradicts named hard rules.
+
+    Instead of keyword co-occurrence, we now look for sentences in the text
+    that contain a constraint keyword AND contain one of the explicit
+    ``"禁止/不允许/绝对不"`` negation markers which would indicate the rule
+    is being discussed as if it were being broken.
+    """
     issues = []
     from codex_writer.core.paths import references_dir_path
     ref_dir = references_dir_path(project_root)
@@ -147,31 +262,54 @@ def _check_setting_consistency(project_root: Path, text: str, chapter: int) -> l
         return issues
 
     rules_text = world_rules_path.read_text(encoding="utf-8", errors="replace")
-    contradictions = []
-    for line in rules_text.splitlines():
-        line = line.strip()
-        if line.startswith("#") or not line:
-            continue
-        for keyword in ["推翻", "改变", "打破", "取消"]:
-            if keyword in line and keyword in text:
-                contradictions.append(line[:80])
+    # Extract rule lines (non-comment, non-empty)
+    rule_lines = [
+        line.strip() for line in rules_text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not rule_lines:
+        return issues
 
-    if contradictions:
-        issues.append({
-            "severity": "medium",
-            "category": "setting",
-            "location": "全文",
-            "description": f"正文可能涉及世界规则变化: {contradictions[0]}",
-            "evidence": contradictions[0],
-            "fix_hint": "确认是否违反已设定的世界规则，或是有意的新规则揭示",
-            "blocking": False,
-            "chapter": 0
-        })
+    # Build per-rule keyword sets (2-char n-gram tokens from rule line).
+    # For each sentence in the chapter that shares ≥2 keywords with a rule
+    # AND contains a negation/violation marker, report a potential conflict.
+    violation_markers = ["违反", "打破", "无视", "推翻", "取消", "改变了", "不再", "已不"]
+    sentences = re.split(r"[。！？\n]", text)
+
+    for rule_line in rule_lines[:30]:  # cap rule iterations to avoid excessive per-sentence checks
+        rule_keywords = set(rule_line[i:i + 2] for i in range(len(rule_line) - 1))
+        if len(rule_keywords) < 2:
+            continue
+        for sent in sentences:
+            if len(sent) < 5:
+                continue
+            sent_keywords = set(sent[i:i + 2] for i in range(len(sent) - 1))
+            overlap = rule_keywords & sent_keywords
+            has_violation = any(marker in sent for marker in violation_markers)
+            if len(overlap) >= 3 and has_violation:
+                issues.append({
+                    "severity": "medium",
+                    "category": "setting",
+                    "location": "全文",
+                    "description": f"正文可能违反世界规则「{rule_line[:60]}」",
+                    "evidence": sent[:80],
+                    "fix_hint": "确认是否有意改写规则；如非有意，请恢复设定一致性",
+                    "blocking": False,
+                    "chapter": chapter,
+                })
+                break  # one report per rule is enough
 
     return issues
 
 
 def _check_character_consistency(project_root: Path, text: str, chapter: int) -> list[dict]:
+    """Check character behaviour against character card definitions.
+
+    Only report a conflict when the character appears AND the chapter
+    contains a sentence that simultaneously mentions the character name
+    AND a keyword that clearly contradicts that character's defined
+    weakness/motivation in the same sentence (±100 chars window).
+    """
     issues = []
     from codex_writer.core.paths import references_dir_path
     ref_dir = references_dir_path(project_root)
@@ -184,27 +322,44 @@ def _check_character_consistency(project_root: Path, text: str, chapter: int) ->
         content = char_csv.read_text(encoding="utf-8", errors="replace")
         reader = csv.DictReader(content.splitlines())
         for row in reader:
-            char_name = row.get("tag", "")
-            char_rule = row.get("content", "")
-            if char_name and char_name in text:
-                opposing_keywords = []
-                if "弱点" in char_rule:
-                    opposing_keywords = ["完美", "全能", "无敌", "毫无破绽"]
-                if "动机" in char_rule:
-                    opposing_keywords = ["随意", "漫无目的", "毫无理由"]
+            char_name = row.get("tag", "").strip()
+            char_rule = row.get("content", "").strip()
+            if not char_name or char_name not in text:
+                continue
+
+            opposing_keywords = []
+            if "弱点" in char_rule:
+                opposing_keywords = ["完美无缺", "天下无敌", "毫无破绽", "从未失败"]
+            if "动机" in char_rule:
+                opposing_keywords = ["毫无目的", "漫无目的", "毫无理由地"]
+            if not opposing_keywords:
+                continue
+
+            # Check within a local window around each character name occurrence.
+            # Pre-compile the pattern once to avoid redundant compilation per iteration.
+            conflict_found = False
+            char_pattern = re.compile(re.escape(char_name))
+            for match in char_pattern.finditer(text):
+                window_start = max(0, match.start() - 100)
+                window_end = min(len(text), match.end() + 100)
+                window = text[window_start:window_end]
                 for kw in opposing_keywords:
-                    if kw in text:
+                    if kw in window:
                         issues.append({
                             "severity": "low",
                             "category": "character",
                             "location": f"角色: {char_name}",
-                            "description": f"角色「{char_name}」行为可能与设定冲突 ({kw})",
-                            "evidence": char_rule[:80],
+                            "description": f"角色「{char_name}」附近出现「{kw}」，可能与设定冲突",
+                            "evidence": window[:80],
                             "fix_hint": f"检查{char_name}的行为是否符合设定: {char_rule[:60]}",
                             "blocking": False,
-                            "chapter": 0
+                            "chapter": chapter,
                         })
-                        break
+                        conflict_found = True
+                        break  # one report per character per run
+                if conflict_found:
+                    break
+
     except (ImportError, OSError):
         pass
 
@@ -239,47 +394,17 @@ def review_chapter(project_root: Path, chapter: int, chapter_text: str) -> dict:
             "chapter": chapter
         })
 
-    for pattern in AI_FLAVOR_PATTERNS:
-        if pattern in chapter_text:
-            issues.append({
-                "severity": "low",
-                "category": "ai_flavor",
-                "location": f"发现模式: {pattern}",
-                "description": f"正文包含AI模板句式「{pattern}」",
-                "evidence": pattern,
-                "fix_hint": "改写该句，使用更自然的表达",
-                "blocking": False,
-                "chapter": chapter
-            })
-
-    issues.extend(_check_cool_points(chapter_text))
-    for i in issues:
-        if i.get("chapter") == 0:
-            i["chapter"] = chapter
-
-    issues.extend(_check_pacing(chapter_text))
-    for i in issues:
-        if i.get("chapter") == 0:
-            i["chapter"] = chapter
-
+    issues.extend(_check_ai_flavor(chapter_text, chapter))
+    issues.extend(_check_cool_points(chapter_text, chapter))
+    issues.extend(_check_chapter_end_hook(chapter_text, chapter))
+    issues.extend(_check_pacing(chapter_text, chapter))
     issues.extend(_check_continuity(project_root, chapter, chapter_text))
-    for i in issues:
-        if i.get("chapter") == 0:
-            i["chapter"] = chapter
-
     issues.extend(_check_setting_consistency(project_root, chapter_text, chapter))
-    for i in issues:
-        if i.get("chapter") == 0:
-            i["chapter"] = chapter
-
     issues.extend(_check_character_consistency(project_root, chapter_text, chapter))
-    for i in issues:
-        if i.get("chapter") == 0:
-            i["chapter"] = chapter
 
     try:
         from codex_writer.reading_power.tracker import get_debt_summary, detect_hooks_from_text
-        rp_hooks = detect_hooks_from_text(chapter_text, chapter)
+        detect_hooks_from_text(chapter_text, chapter)
         rp_summary = get_debt_summary(project_root)
         if rp_summary["open"] > 3:
             issues.append({

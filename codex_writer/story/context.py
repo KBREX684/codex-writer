@@ -1,4 +1,4 @@
-import json
+import os
 from pathlib import Path
 
 from codex_writer.core.io import read_json, write_json_atomic
@@ -13,9 +13,21 @@ from codex_writer.core.paths import (
 )
 from codex_writer.story.bible import load_novel_bible
 
+# Maximum number of recent chapter summaries to include in the context pack.
+# Reads CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL env var (default 5).
+_DEFAULT_CONTEXT_CHAPTERS = 5
+# Maximum number of active anti-AI feedback items sent to the model (windowed).
+_MAX_ANTI_AI_ITEMS = 20
+
+
+def _max_context_chapters() -> int:
+    try:
+        return max(1, int(os.environ.get("CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL", _DEFAULT_CONTEXT_CHAPTERS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_CONTEXT_CHAPTERS
+
 
 def build_context_pack(project_root: Path, chapter: int) -> dict:
-    cw = project_root / ".codex-writer"
     pack = {
         "meta": {"schema_version": "codex-writer/context-pack/v1"},
         "chapter": chapter,
@@ -26,6 +38,7 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
         "state_snapshot": None,
         "open_loops": [],
         "anti_ai_feedback": [],
+        "reading_power": {},
         "references_hits": [],
         "recent_character_changes": {},
         "sources": []
@@ -63,19 +76,50 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
         pack["open_loops"] = [loop for loop in mem.get("open_loops", []) if loop.get("status") != "closed"]
         pack["sources"].append(".codex-writer/memory.json")
 
+    # Load recent chapter summaries — respect CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL.
+    # Iterate from offset=1 (immediately preceding chapter) outward; the resulting
+    # list is already in most-recent-first order which is the intended order for the
+    # model (most relevant context first).
+    context_window = _max_context_chapters()
+    summaries_added = []
+    for offset in range(1, context_window + 1):
+        prev_ch = chapter - offset
+        if prev_ch < 1:
+            break
+        prev_summary_path = summary_path(project_root, prev_ch)
+        if prev_summary_path.exists():
+            summaries_added.append({
+                "chapter": prev_ch,
+                "text": prev_summary_path.read_text(encoding="utf-8"),
+            })
+            pack["sources"].append(f".codex-writer/summaries/第{prev_ch:04d}章.md")
+    pack["recent_summaries"] = summaries_added
+
+    # Anti-AI feedback: send only the most recent _MAX_ANTI_AI_ITEMS active items
+    # so that old, already-fixed patterns don't waste tokens.
     ai_fb = anti_ai_feedback_path(project_root)
     if ai_fb.exists():
         feedback = read_json(ai_fb)
         if isinstance(feedback, list):
-            pack["anti_ai_feedback"] = [item for item in feedback if item.get("status", "active") == "active"]
+            active = [item for item in feedback if item.get("status", "active") == "active"]
+            # Sort by source_chapter descending so the most recent issues come first.
+            active.sort(key=lambda x: x.get("source_chapter", 0), reverse=True)
+            pack["anti_ai_feedback"] = active[:_MAX_ANTI_AI_ITEMS]
         pack["sources"].append(".codex-writer/story/反AI反馈.json")
 
-    prev_chapter = chapter - 1
-    if prev_chapter > 0:
-        prev_summary = summary_path(project_root, prev_chapter)
-        if prev_summary.exists():
-            pack["recent_summaries"].append({"chapter": prev_chapter, "text": prev_summary.read_text(encoding="utf-8")})
-            pack["sources"].append(f".codex-writer/summaries/第{prev_chapter:04d}章.md")
+    # Reading-power: include open debts so planning/draft agents know what to pay off.
+    try:
+        from codex_writer.reading_power.tracker import get_open_debts, get_debt_summary
+        open_debts = get_open_debts(project_root)
+        debt_summary = get_debt_summary(project_root)
+        pack["reading_power"] = {
+            "open_debts": open_debts,
+            "summary": debt_summary,
+        }
+        if open_debts:
+            pack["sources"].append(".codex-writer/reading_power.json")
+    except (ImportError, OSError):
+        pass
 
     try:
         from codex_writer.references.search import search_references
