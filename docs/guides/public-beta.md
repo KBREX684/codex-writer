@@ -11,6 +11,7 @@ codex-writer provider --project-root "./我的小说" configure --preset custom 
 
 set CODEX_WRITER_ALLOW_EXTERNAL_MODELS=1
 set CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY=<your-api-key>
+set CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL=100
 
 codex-writer provider --project-root "./我的小说" test
 codex-writer preflight --project-root "./我的小说" --chapter 1
@@ -62,3 +63,11 @@ codex-writer write --project-root "./我的小说" --chapter 1 --demo
 - 商业市场上架。
 - 大型前端正文编辑器。
 - 真实外部 API 的 CI 测试；自动测试使用本地 mock server。
+
+Production Chapter 1 requires a complete approved million-word novel bible before `plan` or `write`:
+
+```bash
+codex-writer bible --project-root <PROJECT_ROOT> create --target-words 1000000 --target-chapters 500 --volume-count 6 --author-input "<author premise and preferences>"
+codex-writer bible --project-root <PROJECT_ROOT> review
+codex-writer bible --project-root <PROJECT_ROOT> approve
+```

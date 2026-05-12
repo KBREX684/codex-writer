@@ -186,7 +186,7 @@ def cmd_init(args):
         for d in ["正文", "大纲", "设定", "审查报告"]:
             (project_root / d).mkdir(exist_ok=True)
         for d in [
-            "story/volumes", "story/chapters", "story/reviews",
+            "story/volumes", "story/chapters", "story/reviews", "story/bible",
             "agents/运行记录", "events", "reviews", "commits",
             "summaries", "backups", "migrations", "logs", "tmp"
         ]:
@@ -195,6 +195,9 @@ def cmd_init(args):
         write_json_atomic(cw / "project.json", create_project_json(args.title, args.genre))
         write_json_atomic(cw / "state.json", create_initial_state_json())
         write_json_atomic(cw / "memory.json", create_initial_memory_json())
+        from codex_writer.story.bible import create_novel_bible_template, write_novel_bible
+
+        write_novel_bible(project_root, create_novel_bible_template(args.title, args.genre))
         write_json_atomic(cw / "story" / "故事合同.json", create_story_contract(args.title, args.genre))
         write_json_atomic(cw / "story" / "反AI反馈.json", [])
         write_json_atomic(cw / "story" / "volumes" / "第001卷合同.json", create_volume_contract(1))
@@ -327,6 +330,253 @@ def cmd_doctor(args):
     return 0
 
 
+def _first_volume_contract(project_root: Path) -> dict:
+    from codex_writer.core.paths import resolve_in_project
+
+    volumes_dir = resolve_in_project(project_root, ".codex-writer/story/volumes")
+    if not volumes_dir.exists():
+        return {}
+    for path in sorted(volumes_dir.glob("*.json")):
+        try:
+            data = read_json(path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def _bible_project_defaults(project_root: Path) -> dict:
+    from codex_writer.core.paths import project_json_path
+
+    defaults = {"title": "", "genre": ""}
+    path = project_json_path(project_root)
+    if not path.exists():
+        return defaults
+    try:
+        data = read_json(path)
+    except (OSError, ValueError, TypeError):
+        return defaults
+    if isinstance(data, dict):
+        defaults["title"] = str(data.get("title", "") or "")
+        defaults["genre"] = str(data.get("genre", "") or "")
+    return defaults
+
+
+def _external_create_bible(args, project_root: Path, title: str, genre: str) -> dict:
+    from codex_writer.agents.execution import payload_chars, resolve_agent_provider
+    from codex_writer.core.paths import story_contract_path
+    from codex_writer.story.bible import (
+        create_novel_bible_template,
+        normalize_novel_bible,
+    )
+
+    story_contract = {}
+    story_path = story_contract_path(project_root)
+    if story_path.exists():
+        try:
+            story_contract = read_json(story_path)
+        except (OSError, ValueError, TypeError):
+            story_contract = {}
+
+    template = create_novel_bible_template(
+        title,
+        genre,
+        target_words=int(args.target_words),
+        target_chapters=int(args.target_chapters),
+        volume_count=int(args.volume_count),
+    )
+    payload = {
+        "task": "create_complete_million_word_novel_bible_before_chapter_one",
+        "required_schema": "codex-writer/novel-bible/v1",
+        "book": {"title": title, "genre": genre},
+        "target_scale": {
+            "target_words": int(args.target_words),
+            "target_chapters": int(args.target_chapters),
+            "volume_count": int(args.volume_count),
+        },
+        "author_input": args.author_input or "",
+        "current_story_contract": story_contract,
+        "first_volume_contract": _first_volume_contract(project_root),
+        "schema_template": template,
+        "instructions": [
+            "Return only one JSON object. No markdown.",
+            "The bible must be specific enough to support at least one million Chinese webnovel words.",
+            "Fill every required section with concrete long-form planning, not slogans.",
+            "Plan by book-level promise, world and power rules, character arcs, volume roadmap, plot debts, hooks, style contract, and runtime review contract.",
+            "Do not set approval.status to approved. Approval is a separate author-controlled command.",
+        ],
+    }
+    resolution = resolve_agent_provider(
+        project_root,
+        "planning_agent",
+        require_external=True,
+        input_kind="context_pack",
+        input_chars=payload_chars(payload),
+    )
+    if resolution["errors"]:
+        return {"ok": False, "exit_code": resolution["exit_code"], "errors": resolution["errors"]}
+
+    input_text = json.dumps(payload, ensure_ascii=False)
+    result = resolution["provider_obj"].generate({
+        "system_prompt": (
+            "planning_agent: create a complete codex-writer/novel-bible/v1 "
+            "for a million-word Chinese webnovel. Return strict JSON only."
+        ),
+        "task_prompt": input_text,
+        "temperature": 0.35,
+    })
+    errors = _provider_failure_errors(result, "planning_agent returned no novel bible JSON")
+    if not errors and not result.get("json"):
+        errors = [{
+            "code": "INVALID_PROVIDER_OUTPUT",
+            "message": "planning_agent must return a JSON novel bible",
+            "blocking": True,
+        }]
+    if errors:
+        return {"ok": False, "exit_code": 5, "errors": errors, "raw_result": result}
+
+    bible = normalize_novel_bible(
+        result["json"],
+        title,
+        genre,
+        target_words=int(args.target_words),
+        target_chapters=int(args.target_chapters),
+        volume_count=int(args.volume_count),
+    )
+    return {
+        "ok": True,
+        "bible": bible,
+        "provider": resolution["provider"],
+        "model": resolution["model"],
+        "usage": result.get("usage", {}),
+        "input_text": input_text,
+        "output_text": result.get("text", ""),
+    }
+
+
+def cmd_bible(args):
+    from codex_writer.agents.agents import write_agent_run
+    from codex_writer.core.paths import novel_bible_path
+    from codex_writer.story.bible import (
+        approve_novel_bible,
+        create_demo_bible,
+        load_novel_bible,
+        validate_novel_bible,
+        write_novel_bible,
+    )
+
+    project_root = Path(args.project_root).resolve()
+    sub = args.bible_command
+    if sub in ("status", "review"):
+        bible = load_novel_bible(project_root)
+        report = validate_novel_bible(bible)
+        output_json("bible", ok=bible is not None, project_root=str(project_root), data={
+            "path": str(novel_bible_path(project_root)),
+            "bible": report,
+            "approval_status": (bible or {}).get("approval", {}).get("status", ""),
+        })
+        return 0 if bible is not None else 3
+
+    if sub == "approve":
+        try:
+            report = approve_novel_bible(
+                project_root,
+                approved_by=args.approved_by or "author",
+                notes=args.notes or "",
+            )
+        except ValueError as exc:
+            output_json("bible", ok=False, project_root=str(project_root), errors=[{
+                "code": "BIBLE_INCOMPLETE",
+                "message": str(exc),
+                "blocking": True,
+            }])
+            return 3
+        output_json("bible", project_root=str(project_root), data={
+            "path": str(novel_bible_path(project_root)),
+            "bible": report,
+            "approval_status": "approved",
+        })
+        return 0
+
+    if sub == "create":
+        defaults = _bible_project_defaults(project_root)
+        title = args.title or defaults["title"]
+        genre = args.genre or defaults["genre"]
+        existing_report = validate_novel_bible(load_novel_bible(project_root))
+        if existing_report["ready"] and not args.force:
+            output_json("bible", ok=False, project_root=str(project_root), data={"bible": existing_report}, errors=[{
+                "code": "BIBLE_ALREADY_APPROVED",
+                "message": "Approved novel bible already exists. Use --force to replace it.",
+                "blocking": True,
+            }])
+            return 3
+
+        if _is_demo(args):
+            bible = create_demo_bible(
+                title,
+                genre,
+                target_words=int(args.target_words),
+                target_chapters=int(args.target_chapters),
+                volume_count=int(args.volume_count),
+            )
+            provider_meta = {}
+        else:
+            external = _external_create_bible(args, project_root, title, genre)
+            if not external["ok"]:
+                output_json("bible", ok=False, project_root=str(project_root), errors=external["errors"])
+                return external["exit_code"]
+            bible = external["bible"]
+            provider_meta = {
+                "agent": "planning_agent",
+                "provider": external["provider"],
+                "model": external["model"],
+            }
+            run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+            write_agent_run(project_root, {
+                "task_id": f"novel-bible-planning_agent-{run_id}",
+                "run_id": run_id,
+                "chapter": 0,
+                "agent": "planning_agent",
+                "provider": external["provider"],
+                "model": external["model"],
+                "status": "completed",
+                "input_refs": [],
+                "usage": external.get("usage", {}),
+                "errors": [],
+            }, input_text=external.get("input_text", ""), output_text=external.get("output_text", ""))
+
+        report = write_novel_bible(project_root, bible)
+        errors = []
+        if not report["content_ready"]:
+            errors.append({
+                "code": "BIBLE_INCOMPLETE",
+                "message": "Novel bible content is incomplete and cannot be approved yet.",
+                "blocking": True,
+                "missing": report["missing"],
+            })
+        output_json(
+            "bible",
+            ok=not errors,
+            project_root=str(project_root),
+            data={
+                "path": str(novel_bible_path(project_root)),
+                "bible": report,
+                "approval_status": bible.get("approval", {}).get("status", ""),
+                "production_provider": provider_meta,
+            },
+            errors=errors,
+        )
+        return 0 if not errors else 5
+
+    output_json("bible", ok=False, project_root=str(project_root), errors=[{
+        "code": "INVALID_SUBCOMMAND",
+        "message": "Use: bible create|review|status|approve",
+        "blocking": True,
+    }])
+    return 2
+
+
 def cmd_plan(args):
     project_root = Path(args.project_root).resolve()
     try:
@@ -404,13 +654,26 @@ def cmd_plan(args):
     if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
         from codex_writer.agents.agents import write_agent_run
+        from codex_writer.core.paths import story_contract_path
+        from codex_writer.story.bible import load_novel_bible
+
+        story_contract = {}
+        story_path = story_contract_path(project_root)
+        if story_path.exists():
+            try:
+                story_contract = read_json(story_path)
+            except (OSError, ValueError, TypeError):
+                story_contract = {}
 
         payload = {
             "chapter": chapter,
             "title": brief_title,
             "seed_brief": brief,
+            "novel_bible": load_novel_bible(project_root) or {},
+            "story_contract": story_contract,
+            "first_volume_contract": _first_volume_contract(project_root),
             "required_schema": "codex-writer/chapter-brief/v1",
-            "instruction": "Return only a JSON object for a chapter brief. Do not include markdown.",
+            "instruction": "Return only a JSON object for a chapter brief. Use the approved novel bible as the highest creative contract.",
         }
         resolution = resolve_agent_provider(
             project_root,
@@ -522,6 +785,21 @@ def cmd_write(args):
         log_workflow(project_root, run_id, chapter, "context_ready", "blocked", "workflow", "")
         output_json("write", ok=False, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
         return 3
+
+    if production and chapter == 1:
+        from codex_writer.story.foundation import check_foundation_ready, foundation_not_ready_error
+
+        foundation = check_foundation_ready(project_root)
+        if not foundation["ready"]:
+            output_json(
+                "write",
+                ok=False,
+                project_root=str(project_root),
+                run_id=run_id,
+                data={"chapter": chapter, "production": production, "foundation": foundation},
+                errors=[foundation_not_ready_error(foundation)],
+            )
+            return 3
 
     log_workflow(project_root, run_id, chapter, "context_ready", "drafted", "draft_agent", "")
     context_pack_path = None
@@ -1451,6 +1729,28 @@ def _register_subparsers(subparsers):
     sp_doctor.add_argument("--self-check", action="store_true")
     sp_doctor.add_argument("--format", type=str, default="text")
 
+    sp_bible = subparsers.add_parser("bible", help="create, review, and approve the million-word novel bible")
+    sp_bible.add_argument("--project-root", type=str, default=".")
+    sub_bible = sp_bible.add_subparsers(dest="bible_command")
+    sp_bible_create = sub_bible.add_parser("create")
+    sp_bible_create.add_argument("--title", type=str, default="")
+    sp_bible_create.add_argument("--genre", type=str, default="")
+    sp_bible_create.add_argument("--target-words", type=int, default=1000000)
+    sp_bible_create.add_argument("--target-chapters", type=int, default=500)
+    sp_bible_create.add_argument("--volume-count", type=int, default=6)
+    sp_bible_create.add_argument("--author-input", type=str, default="")
+    sp_bible_create.add_argument("--demo", action="store_true")
+    sp_bible_create.add_argument("--force", action="store_true")
+    sp_bible_create.add_argument("--format", type=str, default="text")
+    sp_bible_review = sub_bible.add_parser("review")
+    sp_bible_review.add_argument("--format", type=str, default="text")
+    sp_bible_status = sub_bible.add_parser("status")
+    sp_bible_status.add_argument("--format", type=str, default="text")
+    sp_bible_approve = sub_bible.add_parser("approve")
+    sp_bible_approve.add_argument("--approved-by", type=str, default="author")
+    sp_bible_approve.add_argument("--notes", type=str, default="")
+    sp_bible_approve.add_argument("--format", type=str, default="text")
+
     sp_plan = subparsers.add_parser("plan", help="生成章节任务书")
     sp_plan.add_argument("--project-root", type=str, default=".")
     sp_plan.add_argument("--chapter", type=str, default="1")
@@ -1673,6 +1973,7 @@ def main(argv=None):
         "where": cmd_where,
         "resume": cmd_resume,
         "doctor": cmd_doctor,
+        "bible": cmd_bible,
         "plan": cmd_plan,
         "context": cmd_context,
         "write": cmd_write,

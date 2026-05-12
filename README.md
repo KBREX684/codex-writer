@@ -17,8 +17,12 @@ codex-writer provider --project-root "./我的小说" configure --preset custom 
 
 set CODEX_WRITER_ALLOW_EXTERNAL_MODELS=1
 set CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY=<your-api-key>
+set CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL=100
 
 codex-writer provider --project-root "./我的小说" test
+codex-writer bible --project-root "./我的小说" create --target-words 1000000 --target-chapters 500 --volume-count 6 --author-input "<author premise and preferences>"
+codex-writer bible --project-root "./我的小说" review
+codex-writer bible --project-root "./我的小说" approve
 codex-writer preflight --project-root "./我的小说" --chapter 1
 ```
 

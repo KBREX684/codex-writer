@@ -23,6 +23,17 @@ codex-writer init --project-root <path> --title <title> --genre <genre>
 
 初始化项目目录、故事合同、章节任务目录、Agent 路由、provider 配置模板、日志、提交、投影读模型和备份目录。
 
+## Bible
+
+```bash
+codex-writer bible --project-root <path> create --target-words 1000000 --target-chapters 500 --volume-count 6 --author-input "<author premise and preferences>"
+codex-writer bible --project-root <path> review
+codex-writer bible --project-root <path> status
+codex-writer bible --project-root <path> approve
+```
+
+`bible create` calls the production `planning_agent` and writes `.codex-writer/story/bible/百万字创作圣经.json` plus a markdown mirror. The command deliberately leaves `approval.status=draft`; the author must review and run `bible approve` before Chapter 1 production planning or writing can pass foundation checks.
+
 ## Provider
 
 ```bash
@@ -39,6 +50,7 @@ API Key 只能通过环境变量提供：
 ```bash
 set CODEX_WRITER_ALLOW_EXTERNAL_MODELS=1
 set CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY=<your-api-key>
+set CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL=100
 ```
 
 配置优先级为：CLI 参数 > 环境变量 > 项目 provider 配置 > preset 默认值。
@@ -66,6 +78,8 @@ codex-writer plan --project-root <path> --chapter N --title <title> --demo
 `--production` 是 v0.7 兼容别名，v1.0 默认已是生产链路。
 
 ## Write
+
+Chapter 1 production writing is blocked until the million-word novel bible is complete and approved. `write` uses the context pack, which now includes the approved `novel_bible`, so draft and extraction agents stay anchored to the long-form bible.
 
 ```bash
 codex-writer write --project-root <path> --chapter N [--no-backup]

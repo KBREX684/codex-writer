@@ -106,6 +106,27 @@ def seed_foundation(project):
     (project / "大纲" / "第001卷纲.md").write_text("第一卷完成弱势开局、资源发现、第一轮敌人压迫。", encoding="utf-8")
 
 
+def approve_demo_bible(project):
+    create = run_cli(
+        "bible",
+        "--project-root", str(project),
+        "create",
+        "--demo",
+        "--target-words", "1000000",
+        "--target-chapters", "500",
+        "--format", "json",
+    )
+    assert create.returncode == 0, create.stdout + create.stderr
+    approve = run_cli(
+        "bible",
+        "--project-root", str(project),
+        "approve",
+        "--format", "json",
+    )
+    assert approve.returncode == 0, approve.stdout + approve.stderr
+    return json.loads(approve.stdout)
+
+
 def set_route(project, agent, provider="openai_compatible", model="writer-test"):
     path = agent_router_path(project)
     router = json.loads(path.read_text(encoding="utf-8"))
@@ -119,6 +140,7 @@ def provider_env(base_url):
         "CODEX_WRITER_OPENAI_COMPATIBLE_BASE_URL": base_url,
         "CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY": "sk-test",
         "CODEX_WRITER_OPENAI_COMPATIBLE_MODEL": "",
+        "CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL": "100",
     }
 
 
@@ -143,6 +165,7 @@ def test_production_preflight_requires_external_planning_and_draft_routes(tmp_pa
 def test_plan_production_uses_openai_compatible_provider(tmp_path):
     project = make_project(tmp_path)
     seed_foundation(project)
+    approve_demo_bible(project)
     set_route(project, "planning_agent")
     brief = {
         "meta": {"schema_version": "codex-writer/chapter-brief/v1"},
@@ -183,6 +206,8 @@ def test_plan_production_uses_openai_compatible_provider(tmp_path):
 
 def test_write_production_uses_external_draft_text(tmp_path):
     project = make_project(tmp_path)
+    seed_foundation(project)
+    approve_demo_bible(project)
     run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--demo", "--format", "json")
     set_route(project, "draft_agent")
     set_route(project, "extract_agent")

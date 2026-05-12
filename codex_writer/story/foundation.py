@@ -5,6 +5,7 @@ from typing import Any
 
 from codex_writer.core.io import read_json
 from codex_writer.core.paths import resolve_in_project, story_contract_path
+from codex_writer.story.bible import load_novel_bible, validate_novel_bible
 
 
 STORY_CORE_FIELDS = ("one_sentence_pitch", "core_tone", "main_conflict")
@@ -25,6 +26,7 @@ def check_foundation_ready(project_root: Path, volume: int = 1) -> dict:
     story = _read_json_if_exists(story_contract_path(project_root))
     volume_path = resolve_in_project(project_root, f".codex-writer/story/volumes/第{volume:03d}卷合同.json")
     volume_contract = _read_json_if_exists(volume_path)
+    bible_checks = validate_novel_bible(load_novel_bible(project_root))
 
     story_checks = _story_contract_checks(story)
     volume_checks = _volume_contract_checks(volume_contract)
@@ -36,6 +38,7 @@ def check_foundation_ready(project_root: Path, volume: int = 1) -> dict:
         "story_contract": story_checks,
         "volume_contract_exists": volume_contract is not None,
         "volume_contract": volume_checks,
+        "bible": bible_checks,
         "setting_files": bool(setting_files),
         "outline_files": bool(outline_files),
     }
@@ -46,6 +49,13 @@ def check_foundation_ready(project_root: Path, volume: int = 1) -> dict:
     if volume_contract is None:
         missing.append(f"volume_{volume:03d}_contract")
     missing.extend(f"volume_{volume:03d}_contract.{name}" for name, ok in volume_checks.items() if not ok)
+    if not bible_checks["ready"]:
+        missing.append("novel_bible")
+        missing.extend(
+            f"novel_bible.{name}"
+            for name in bible_checks.get("missing", [])
+            if name != "novel_bible"
+        )
     if not setting_files:
         missing.append("设定/*.md")
     if not outline_files:
@@ -63,6 +73,7 @@ def check_foundation_ready(project_root: Path, volume: int = 1) -> dict:
     return {
         "ready": ready,
         "checks": checks,
+        "bible": bible_checks,
         "missing": missing,
         "setting_files": setting_files,
         "outline_files": outline_files,

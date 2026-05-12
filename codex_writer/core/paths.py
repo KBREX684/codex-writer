@@ -71,6 +71,14 @@ def story_contract_path(project_root: Path) -> Path:
     return resolve_in_project(project_root, ".codex-writer/story/故事合同.json")
 
 
+def novel_bible_path(project_root: Path) -> Path:
+    return resolve_in_project(project_root, ".codex-writer/story/bible/百万字创作圣经.json")
+
+
+def novel_bible_markdown_path(project_root: Path) -> Path:
+    return resolve_in_project(project_root, ".codex-writer/story/bible/百万字创作圣经.md")
+
+
 def anti_ai_feedback_path(project_root: Path) -> Path:
     return resolve_in_project(project_root, ".codex-writer/story/反AI反馈.json")
 

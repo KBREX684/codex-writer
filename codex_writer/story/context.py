@@ -9,7 +9,9 @@ from codex_writer.core.paths import (
     state_path,
     memory_path,
     summary_path,
+    novel_bible_path,
 )
+from codex_writer.story.bible import load_novel_bible
 
 
 def build_context_pack(project_root: Path, chapter: int) -> dict:
@@ -17,6 +19,7 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
     pack = {
         "meta": {"schema_version": "codex-writer/context-pack/v1"},
         "chapter": chapter,
+        "novel_bible": None,
         "story_contract": None,
         "chapter_brief": None,
         "recent_summaries": [],
@@ -27,6 +30,11 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
         "recent_character_changes": {},
         "sources": []
     }
+
+    bible = load_novel_bible(project_root)
+    if bible:
+        pack["novel_bible"] = bible
+        pack["sources"].append(str(novel_bible_path(project_root).relative_to(project_root)).replace("\\", "/"))
 
     sc = story_contract_path(project_root)
     if sc.exists():

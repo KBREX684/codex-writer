@@ -99,6 +99,27 @@ def seed_foundation(project):
     (project / "大纲" / "第001卷纲.md").write_text("第一卷完成弱势开局、资源发现、第一轮敌人压迫。", encoding="utf-8")
 
 
+def approve_demo_bible(project):
+    create = run_cli(
+        "bible",
+        "--project-root", str(project),
+        "create",
+        "--demo",
+        "--target-words", "1000000",
+        "--target-chapters", "500",
+        "--format", "json",
+    )
+    assert create.returncode == 0, create.stdout + create.stderr
+    approve = run_cli(
+        "bible",
+        "--project-root", str(project),
+        "approve",
+        "--format", "json",
+    )
+    assert approve.returncode == 0, approve.stdout + approve.stderr
+    return json.loads(approve.stdout)
+
+
 def env_with_key():
     return {
         "CODEX_WRITER_ALLOW_EXTERNAL_MODELS": "1",
@@ -214,8 +235,52 @@ def test_preflight_reports_blank_foundation_after_init(tmp_path):
 
     assert result.returncode != 0
     payload = json.loads(result.stdout)
+    assert (project / ".codex-writer" / "story" / "bible" / "百万字创作圣经.json").exists()
     assert payload["data"]["foundation"]["ready"] is False
+    assert payload["data"]["foundation"]["bible"]["ready"] is False
     assert any(warning["code"] == "FOUNDATION_INCOMPLETE" for warning in payload["data"]["warnings"])
+
+
+def test_preflight_blocks_old_foundation_without_approved_bible(tmp_path):
+    project = make_project(tmp_path)
+    seed_foundation(project)
+
+    result = run_cli("preflight", "--project-root", str(project), "--chapter", "1", "--format", "json")
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["foundation"]["ready"] is False
+    assert payload["data"]["foundation"]["bible"]["content_ready"] is False
+    assert "novel_bible" in payload["data"]["foundation"]["missing"]
+    assert any(warning["code"] == "FOUNDATION_INCOMPLETE" for warning in payload["data"]["warnings"])
+
+
+def test_bible_demo_create_and_approve_unlocks_foundation(tmp_path):
+    project = make_project(tmp_path)
+    seed_foundation(project)
+
+    create = run_cli(
+        "bible",
+        "--project-root", str(project),
+        "create",
+        "--demo",
+        "--target-words", "1000000",
+        "--target-chapters", "500",
+        "--format", "json",
+    )
+    assert create.returncode == 0, create.stdout + create.stderr
+    create_payload = json.loads(create.stdout)
+    assert create_payload["data"]["bible"]["content_ready"] is True
+    assert create_payload["data"]["bible"]["ready"] is False
+
+    approve = run_cli("bible", "--project-root", str(project), "approve", "--format", "json")
+    assert approve.returncode == 0, approve.stdout + approve.stderr
+    approve_payload = json.loads(approve.stdout)
+    assert approve_payload["data"]["bible"]["ready"] is True
+
+    preflight = run_cli("preflight", "--project-root", str(project), "--chapter", "1", "--demo", "--format", "json")
+    preflight_payload = json.loads(preflight.stdout)
+    assert preflight_payload["data"]["foundation"]["ready"] is True
 
 
 def test_plan_chapter_one_blocks_when_foundation_blank(tmp_path):
@@ -245,6 +310,7 @@ def test_plan_chapter_one_blocks_when_foundation_blank(tmp_path):
 def test_plan_defaults_to_production_and_uses_project_provider_config(tmp_path):
     project = make_project(tmp_path)
     seed_foundation(project)
+    approve_demo_bible(project)
     server, base_url, requests = start_chat_server([brief_json(1, "Entry")])
     configure_provider(project, base_url)
 
@@ -265,11 +331,16 @@ def test_plan_defaults_to_production_and_uses_project_provider_config(tmp_path):
     assert saved["goal"] == "Chapter 1 goal."
     assert requests[0]["authorization"] == "Bearer sk-v1-test-secret"
     assert requests[0]["body"]["model"] == "writer-v1"
+    prompt_payload = json.loads(requests[0]["body"]["messages"][1]["content"])
+    assert prompt_payload["novel_bible"]["meta"]["schema_version"] == "codex-writer/novel-bible/v1"
+    assert prompt_payload["novel_bible"]["approval"]["status"] == "approved"
     assert json.loads(result.stdout)["data"]["production"] is True
 
 
 def test_write_defaults_to_production_and_external_extract(tmp_path):
     project = make_project(tmp_path)
+    seed_foundation(project)
+    approve_demo_bible(project)
     run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--demo", "--format", "json")
     server, base_url, requests = start_chat_server([draft_text(1), extraction_json(1)])
     configure_provider(project, base_url)
@@ -297,6 +368,8 @@ def test_write_defaults_to_production_and_external_extract(tmp_path):
 
 def test_write_without_provider_config_blocks_before_writing(tmp_path):
     project = make_project(tmp_path)
+    seed_foundation(project)
+    approve_demo_bible(project)
     run_cli("plan", "--project-root", str(project), "--chapter", "1", "--title", "Entry", "--demo", "--format", "json")
 
     result = run_cli("write", "--project-root", str(project), "--chapter", "1", "--format", "json")
@@ -346,6 +419,7 @@ def test_demo_write_keeps_local_pipeline(tmp_path):
 def test_ten_chapter_dogfood_uses_provider_and_updates_read_models(tmp_path):
     project = make_project(tmp_path)
     seed_foundation(project)
+    approve_demo_bible(project)
     responses = []
     for chapter in range(1, 11):
         responses.append(brief_json(chapter, f"Entry {chapter}"))

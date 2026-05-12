@@ -7,9 +7,10 @@ description: Execute the Codex Writer production chapter workflow through the CL
 
 Formal writing in v1.0 defaults to production mode:
 
-Before Chapter 1 production, confirm the creative foundation is complete and approved: story contract, first volume contract, worldbuilding/power rules, character cards, full-book outline, and volume outline. If it is missing, stop before `plan` or `write` and help the author build the foundation.
+Before Chapter 1 production, confirm the creative foundation and million-word novel bible are complete and approved: story contract, first volume contract, worldbuilding/power rules, character cards, full-book outline, volume outline, and `codex-writer bible ... review` with `data.bible.ready=true`. If it is missing, stop before `plan` or `write` and help the author build the foundation.
 
 ```bash
+codex-writer bible --project-root <ROOT> review
 codex-writer preflight --project-root <ROOT> --chapter <N>
 codex-writer plan --project-root <ROOT> --chapter <N> --title "<TITLE>"
 codex-writer write --project-root <ROOT> --chapter <N>
@@ -36,6 +37,7 @@ Production boundaries:
 - commit and projections remain local; external agents never write `state.json`, `index.sqlite`, or `commits/`.
 
 Rules:
+- Do not use `write` to compensate for missing planning. If the bible or chapter brief is missing, fix that layer first.
 - Do not write API keys into project files or prompts.
 - Do not edit `.codex-writer/state.json`, `index.sqlite`, or `commits/` directly.
 - If the CLI returns non-zero, report the JSON error and stop.
