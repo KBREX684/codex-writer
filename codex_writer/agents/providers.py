@@ -1,4 +1,5 @@
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Protocol
@@ -9,6 +10,11 @@ from codex_writer.core.config import Settings, load_settings
 OPENAI_COMPATIBLE = "openai_compatible"
 CODEX_PROVIDER = "codex"
 MOCK_PROVIDER = "mock"
+
+# Retry configuration for transient HTTP errors (429, 5xx).
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0   # seconds; doubles on each attempt
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 class ProviderConfigurationError(Exception):
@@ -136,40 +142,55 @@ class OpenAICompatibleProvider:
         if max_tokens > 0:
             body["max_tokens"] = max_tokens
 
-        request = urllib.request.Request(
-            _chat_completions_url(self.base_url),
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(
-                request,
-                timeout=self.timeout_seconds,
-            ) as response:
-                raw_text = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            return _provider_error(f"HTTP {exc.code}: {detail}")
-        except OSError as exc:
-            return _provider_error(str(exc))
-
-        try:
-            raw = json.loads(raw_text)
-        except json.JSONDecodeError:
-            return _provider_error("Provider returned invalid JSON")
-
-        text = _extract_completion_text(raw)
-        return {
-            "text": text,
-            "json": parse_json_content(text),
-            "raw": raw,
-            "usage": raw.get("usage", {}),
-            "error": None,
+        url = _chat_completions_url(self.base_url)
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
         }
+
+        last_error = ""
+        delay = _RETRY_BASE_DELAY
+        for attempt in range(1, _MAX_RETRIES + 1):
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    raw_text = response.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                status = exc.code
+                detail = exc.read().decode("utf-8", errors="replace")
+                last_error = f"HTTP {status}: {detail}"
+                if status in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+                    # Respect Retry-After header when present (429)
+                    retry_after = exc.headers.get("Retry-After")
+                    wait = float(retry_after) if retry_after and retry_after.isdigit() else delay
+                    time.sleep(wait)
+                    delay *= 2
+                    continue
+                return _provider_error(last_error)
+            except OSError as exc:
+                last_error = str(exc)
+                if attempt < _MAX_RETRIES:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                return _provider_error(last_error)
+
+            try:
+                raw = json.loads(raw_text)
+            except json.JSONDecodeError:
+                return _provider_error("Provider returned invalid JSON")
+
+            text = _extract_completion_text(raw)
+            return {
+                "text": text,
+                "json": parse_json_content(text),
+                "raw": raw,
+                "usage": raw.get("usage", {}),
+                "error": None,
+            }
+
+        return _provider_error(last_error)
 
 
 def _provider_error(message: str) -> dict:

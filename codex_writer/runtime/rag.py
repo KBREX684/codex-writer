@@ -13,20 +13,44 @@ class RAGConfig:
     rerank_api_key: str = ""
 
     @property
-    def embedding_available(self) -> bool:
+    def embedding_configured(self) -> bool:
+        """True when embedding credentials are present in the environment."""
         return bool(self.embed_base_url and self.embed_api_key)
 
     @property
-    def rerank_available(self) -> bool:
+    def rerank_configured(self) -> bool:
+        """True when reranker credentials are present in the environment."""
         return bool(self.rerank_base_url and self.rerank_api_key)
 
     @property
     def mode(self) -> str:
-        if self.embedding_available and self.rerank_available:
+        """Actual search mode that the running code supports.
+
+        The current implementation only provides BM25 search
+        (``codex_writer/references/search.py``).  Even if embedding or
+        reranker credentials are configured, the retrieval path will still use
+        BM25 until a vector/hybrid backend is implemented.  This property is
+        intentionally honest so that ``status`` output never claims a
+        capability that isn't wired up.
+
+        When a vector backend is added in a future version this method should
+        be updated to return ``"vector"`` or ``"hybrid"`` as appropriate.
+        """
+        return "bm25"
+
+    @property
+    def configured_mode(self) -> str:
+        """Mode that *would* be active if a vector backend were implemented.
+
+        Useful for roadmap/status messages that want to communicate what
+        credentials the author has provided without over-promising search
+        quality.
+        """
+        if self.embedding_configured and self.rerank_configured:
             return "hybrid"
-        elif self.embedding_available:
+        elif self.embedding_configured:
             return "vector"
-        elif self.rerank_available:
+        elif self.rerank_configured:
             return "degraded"
         else:
             return "bm25"
@@ -44,5 +68,6 @@ def load_rag_config() -> RAGConfig:
 
 
 def get_search_mode(project_root: Path) -> str:
+    """Return the *actual* search mode used at runtime (always ``"bm25"`` for now)."""
     config = load_rag_config()
     return config.mode

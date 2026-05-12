@@ -873,7 +873,7 @@ def cmd_write(args):
 
     log_workflow(project_root, run_id, chapter, "drafted", "reviewed", "review_agent", "")
     review_result = run_review(project_root, chapter)
-    append_anti_ai_feedback(project_root, review_result.get("issues", []))
+    append_anti_ai_feedback(project_root, review_result.get("issues", []), current_chapter=chapter)
     write_agent_run(project_root, {
         "task_id": f"ch{chapter:04d}-review_agent-run_{run_id}",
         "run_id": run_id, "chapter": chapter,
@@ -970,7 +970,7 @@ def cmd_review(args):
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter)
     result = run_review(project_root, chapter)
-    append_anti_ai_feedback(project_root, result.get("issues", []))
+    append_anti_ai_feedback(project_root, result.get("issues", []), current_chapter=chapter)
     if result["blocking_count"] > 0:
         output_json("review", ok=False, data=result, project_root=str(project_root),
                     errors=[{"code": "REVIEW_BLOCKING", "message": f"审查发现 {result['blocking_count']} 个阻断问题", "blocking": True}])

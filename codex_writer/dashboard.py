@@ -765,9 +765,23 @@ def _safe_get(root: Path, rel_path: str, key: str) -> str:
 
 
 def _safe_rag(root: Path) -> str:
-    try:
-        from codex_writer.runtime.rag import get_search_mode
+    """Return the current search mode string.
 
-        return get_search_mode(root)
+    If embedding/reranker credentials are configured but the vector backend is
+    not yet implemented, the actual mode is ``"bm25"`` while
+    ``configured_mode`` reflects what credentials were provided.  In that case
+    we return a compound string like ``"bm25 (配置: hybrid)"`` so the author
+    can see both the honest running mode and their credential configuration at a
+    glance.
+    """
+    try:
+        from codex_writer.runtime.rag import load_rag_config
+
+        config = load_rag_config()
+        actual = config.mode
+        configured = config.configured_mode
+        if actual != configured:
+            return f"{actual} (配置: {configured})"
+        return actual
     except (ImportError, OSError, ValueError, KeyError):
         return "unavailable"
