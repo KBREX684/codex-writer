@@ -163,10 +163,13 @@ class OpenAICompatibleProvider:
                 if status in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
                     # Respect Retry-After header when present (429).
                     # RFC 7231 allows either an integer (seconds) or an HTTP-date;
-                    # we only handle the integer form here — HTTP-date values fall
+                    # we handle numeric values (int or float); HTTP-date values fall
                     # back to the exponential-backoff delay, which is safe.
                     retry_after = exc.headers.get("Retry-After")
-                    wait = float(retry_after) if retry_after and retry_after.isdigit() else delay
+                    try:
+                        wait = float(retry_after) if retry_after else delay
+                    except (TypeError, ValueError):
+                        wait = delay
                     time.sleep(wait)
                     delay *= 2
                     continue

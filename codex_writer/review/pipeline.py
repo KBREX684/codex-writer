@@ -335,9 +335,11 @@ def _check_character_consistency(project_root: Path, text: str, chapter: int) ->
             if not opposing_keywords:
                 continue
 
-            # Check within a local window around each character name occurrence
+            # Check within a local window around each character name occurrence.
+            # Pre-compile the pattern once to avoid redundant compilation per iteration.
             conflict_found = False
-            for match in re.finditer(re.escape(char_name), text):
+            char_pattern = re.compile(re.escape(char_name))
+            for match in char_pattern.finditer(text):
                 window_start = max(0, match.start() - 100)
                 window_end = min(len(text), match.end() + 100)
                 window = text[window_start:window_end]
