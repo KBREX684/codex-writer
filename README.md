@@ -18,6 +18,20 @@ codex-writer provider --project-root "./我的小说" configure --preset custom 
 set CODEX_WRITER_ALLOW_EXTERNAL_MODELS=1
 set CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY=<your-api-key>
 
+codex-writer provider --project-root "./我的小说" test
+codex-writer preflight --project-root "./我的小说" --chapter 1
+```
+
+初始化后先补创作底座，不要直接进入第 1 章：
+
+- 填写 `.codex-writer/story/故事合同.json`：一句话卖点、基调、主冲突、读者承诺、硬规则、世界规则、主要人物、文风规则和禁区。
+- 填写 `.codex-writer/story/volumes/第001卷合同.json`：卷名、卷目标、关键里程碑、登场人物和卷尾钩子。
+- 在 `设定/` 下补世界观、力量体系、势力/资源/地点、人物卡等资料。
+- 在 `大纲/` 下补全书大纲、卷纲和初始章节方向。
+
+底座完成后再进入章节生产：
+
+```bash
 codex-writer preflight --project-root "./我的小说" --chapter 1
 codex-writer plan --project-root "./我的小说" --chapter 1 --title "入局"
 codex-writer write --project-root "./我的小说" --chapter 1
@@ -40,7 +54,7 @@ codex-writer write --project-root "./我的小说" --chapter 1 --demo
 | `init` | 初始化新书项目 |
 | `provider presets/configure/status/test` | 查看、配置、检查外部模型供应商 |
 | `preflight` | 检查项目结构和生产写作可用性 |
-| `plan` | 默认调用 `planning_agent` 外部模型生成章节任务书 |
+| `plan` | 默认调用 `planning_agent` 外部模型生成章节任务书；第 1 章正式规划前会阻断空白创作底座 |
 | `write` | 默认执行生产链路：外部正文生成、本地审查、外部事实抽取、本地提交和投影 |
 | `review` | 本地规则审查指定章节 |
 | `extract` | 默认调用 `extract_agent` 外部模型抽取结构化事实 |

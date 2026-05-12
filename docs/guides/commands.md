@@ -52,6 +52,8 @@ codex-writer preflight --project-root <path> [--chapter N] --demo
 
 默认检查生产可用性，包括项目结构、章节状态、投影一致性、生产 Agent 路由、provider 配置、隐私开关和 API Key。`--demo` 只检查本地结构。
 
+当检查第 1 章的正式生产链路时，`preflight` 还会检查创作底座是否完成：故事合同、第一卷合同、`设定/` 资料和 `大纲/` 资料。底座不完整时 `mainline_ready=false`，并在 `data.foundation` 中列出缺口。
+
 ## Plan
 
 ```bash
@@ -59,7 +61,7 @@ codex-writer plan --project-root <path> --chapter N --title <title>
 codex-writer plan --project-root <path> --chapter N --title <title> --demo
 ```
 
-默认调用 `planning_agent` 外部模型生成章节任务书 JSON。`--demo` 使用本地模板生成任务书，适合离线测试。
+默认调用 `planning_agent` 外部模型生成章节任务书 JSON。第 1 章正式规划前会检查创作底座，若故事合同、第一卷合同、设定资料或大纲资料仍为空，则返回 `FOUNDATION_NOT_READY`，不会调用外部模型。`--demo` 使用本地模板生成任务书，适合离线测试。
 
 `--production` 是 v0.7 兼容别名，v1.0 默认已是生产链路。
 

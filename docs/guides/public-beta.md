@@ -23,14 +23,26 @@ codex-writer preflight --project-root "./我的小说" --chapter 1
 ```bash
 codex-writer init --project-root "./我的小说" --title "我的小说" --genre "修仙"
 codex-writer provider --project-root "./我的小说" configure --preset custom --base-url https://api.example.com/v1 --model writer-model
-codex-writer preflight --project-root "./我的小说" --chapter 1
+codex-writer provider --project-root "./我的小说" test
+```
 
+初始化后先补创作底座：
+
+1. 补 `.codex-writer/story/故事合同.json`：卖点、基调、主冲突、读者承诺、硬规则、世界规则、主要人物、文风规则和禁区。
+2. 补 `.codex-writer/story/volumes/第001卷合同.json`：卷名、卷目标、关键里程碑、登场人物和卷尾钩子。
+3. 在 `设定/` 下补世界观、力量体系、势力/资源/地点、人物卡等资料。
+4. 在 `大纲/` 下补全书大纲、卷纲和初始章节方向。
+
+底座完成后再进入章节生产：
+
+```bash
+codex-writer preflight --project-root "./我的小说" --chapter 1
 codex-writer plan --project-root "./我的小说" --chapter 1 --title "入局"
 codex-writer write --project-root "./我的小说" --chapter 1
 codex-writer dashboard --project-root "./我的小说" --format html
 ```
 
-连续写作时，每章重复 `plan -> write -> dashboard/status`。如果要离线演示或测试工程闭环，使用：
+连续写作时，每章重复 `preflight -> plan -> write -> dashboard/status`。如果要离线演示或测试工程闭环，使用：
 
 ```bash
 codex-writer plan --project-root "./我的小说" --chapter 1 --title "入局" --demo

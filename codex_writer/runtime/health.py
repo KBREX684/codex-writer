@@ -11,7 +11,7 @@ from codex_writer.core.paths import (
 )
 
 
-def check_mainline_health(project_root: Path, chapter: int = None) -> dict:
+def check_mainline_health(project_root: Path, chapter: int = None, require_foundation: bool = False) -> dict:
     cw = codex_writer_dir(project_root)
     result = {
         "mainline_ready": True,
@@ -34,6 +34,23 @@ def check_mainline_health(project_root: Path, chapter: int = None) -> dict:
     if not sc.exists():
         result["mainline_ready"] = False
         result["warnings"].append({"code": "STORY_CONTRACT_MISSING", "message": "故事合同缺失"})
+
+    try:
+        from codex_writer.story.foundation import check_foundation_ready
+
+        foundation = check_foundation_ready(project_root)
+        result["foundation"] = foundation
+        if require_foundation and not foundation["ready"]:
+            result["mainline_ready"] = False
+            result["warnings"].extend(foundation["warnings"])
+    except Exception as exc:
+        result["foundation"] = {"ready": False, "error": str(exc)}
+        if require_foundation:
+            result["mainline_ready"] = False
+            result["warnings"].append({
+                "code": "FOUNDATION_CHECK_FAILED",
+                "message": "创作底座检查失败",
+            })
 
     project_json = cw / "project.json"
     result["checks"]["project_json"] = project_json.exists()

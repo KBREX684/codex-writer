@@ -7,6 +7,8 @@ description: Execute the Codex Writer production chapter workflow through the CL
 
 Formal writing in v1.0 defaults to production mode:
 
+Before Chapter 1 production, confirm the creative foundation is complete and approved: story contract, first volume contract, worldbuilding/power rules, character cards, full-book outline, and volume outline. If it is missing, stop before `plan` or `write` and help the author build the foundation.
+
 ```bash
 codex-writer preflight --project-root <ROOT> --chapter <N>
 codex-writer plan --project-root <ROOT> --chapter <N> --title "<TITLE>"

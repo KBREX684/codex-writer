@@ -382,6 +382,25 @@ def cmd_plan(args):
         pass
 
     production = _is_production(args)
+    if production and chapter == 1:
+        from codex_writer.story.foundation import check_foundation_ready, foundation_not_ready_error
+
+        foundation = check_foundation_ready(project_root)
+        if not foundation["ready"]:
+            output_json(
+                "plan",
+                ok=False,
+                project_root=str(project_root),
+                data={
+                    "chapter": chapter,
+                    "title": brief_title,
+                    "production": production,
+                    "foundation": foundation,
+                },
+                errors=[foundation_not_ready_error(foundation)],
+            )
+            return 3
+
     if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
         from codex_writer.agents.agents import write_agent_run
@@ -1115,7 +1134,11 @@ def cmd_preflight(args):
     from codex_writer.runtime.health import check_mainline_health, check_projection_health
     project_root = Path(args.project_root).resolve()
     chapter = int(args.chapter) if args.chapter is not None else None
-    health = check_mainline_health(project_root, chapter)
+    health = check_mainline_health(
+        project_root,
+        chapter,
+        require_foundation=_is_production(args) and chapter == 1,
+    )
     if chapter is not None:
         proj_health = check_projection_health(project_root, chapter)
         health["projection_details"] = proj_health

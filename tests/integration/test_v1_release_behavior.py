@@ -66,10 +66,44 @@ def make_project(tmp_path):
     return project
 
 
+def seed_foundation(project):
+    story_path = project / ".codex-writer" / "story" / "故事合同.json"
+    story = json.loads(story_path.read_text(encoding="utf-8"))
+    story["core"] = {
+        "one_sentence_pitch": "A disgraced cultivator rebuilds his path through a concrete revenge vow.",
+        "core_tone": "sharp, escalating, contract-first xianxia",
+        "main_conflict": "Xiao Heng must expose the sect conspiracy before his stolen foundation collapses.",
+        "reader_promise": ["clear cultivation gains", "stable power rules", "escalating enemies"],
+    }
+    story["hard_rules"] = ["No realm jump without cost."]
+    story["world_rules"] = ["Spirit roots determine safe qi intake and backlash risk."]
+    story["main_characters"] = [{"name": "Xiao Heng", "role": "protagonist", "motivation": "restore his stolen foundation"}]
+    story["style_rules"] = ["End each chapter on a new threat, cost, or resource."]
+    story["forbidden_patterns"] = ["Do not solve conflicts with unexplained hidden masters."]
+    story_path.write_text(json.dumps(story, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    volume_path = project / ".codex-writer" / "story" / "volumes" / "第001卷合同.json"
+    volume = json.loads(volume_path.read_text(encoding="utf-8"))
+    volume.update({
+        "title": "Blackwater Awakening",
+        "goal": "Xiao Heng survives the opening conspiracy and claims the bronze token.",
+        "key_milestones": ["public humiliation", "bronze token discovery", "sealed gate opens"],
+        "characters_introduced": ["Xiao Heng", "Blackwater Elder"],
+        "ending_hook": "The sect learns the stolen foundation is still alive.",
+    })
+    volume_path.write_text(json.dumps(volume, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    (project / "设定" / "世界观.md").write_text("灵根、灵脉、境界反噬构成修行物理。", encoding="utf-8")
+    (project / "设定" / "人物卡.md").write_text("萧衡：被夺根基后以复仇和自证为动机。", encoding="utf-8")
+    (project / "大纲" / "总纲.md").write_text("全书围绕夺回根基、揭开宗门旧案、重定仙途规则推进。", encoding="utf-8")
+    (project / "大纲" / "第001卷纲.md").write_text("第一卷完成弱势开局、资源发现、第一轮敌人压迫。", encoding="utf-8")
+
+
 def env_with_key():
     return {
         "CODEX_WRITER_ALLOW_EXTERNAL_MODELS": "1",
         "CODEX_WRITER_OPENAI_COMPATIBLE_API_KEY": "sk-v1-test-secret",
+        "CODEX_WRITER_MAX_CONTEXT_CHAPTERS_EXTERNAL": "50",
     }
 
 
@@ -173,8 +207,44 @@ def test_provider_status_and_test_redact_api_key(tmp_path):
     assert "sk-v1-test-secret" not in test.stdout
 
 
+def test_preflight_reports_blank_foundation_after_init(tmp_path):
+    project = make_project(tmp_path)
+
+    result = run_cli("preflight", "--project-root", str(project), "--chapter", "1", "--format", "json")
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["foundation"]["ready"] is False
+    assert any(warning["code"] == "FOUNDATION_INCOMPLETE" for warning in payload["data"]["warnings"])
+
+
+def test_plan_chapter_one_blocks_when_foundation_blank(tmp_path):
+    project = make_project(tmp_path)
+    server, base_url, requests = start_chat_server([brief_json(1, "Entry")])
+    configure_provider(project, base_url)
+
+    try:
+        result = run_cli(
+            "plan",
+            "--project-root", str(project),
+            "--chapter", "1",
+            "--title", "Entry",
+            "--format", "json",
+            env=env_with_key(),
+        )
+    finally:
+        server.shutdown()
+
+    assert result.returncode == 3
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert any(error["code"] == "FOUNDATION_NOT_READY" for error in payload["errors"])
+    assert requests == []
+
+
 def test_plan_defaults_to_production_and_uses_project_provider_config(tmp_path):
     project = make_project(tmp_path)
+    seed_foundation(project)
     server, base_url, requests = start_chat_server([brief_json(1, "Entry")])
     configure_provider(project, base_url)
 
@@ -275,6 +345,7 @@ def test_demo_write_keeps_local_pipeline(tmp_path):
 
 def test_ten_chapter_dogfood_uses_provider_and_updates_read_models(tmp_path):
     project = make_project(tmp_path)
+    seed_foundation(project)
     responses = []
     for chapter in range(1, 11):
         responses.append(brief_json(chapter, f"Entry {chapter}"))

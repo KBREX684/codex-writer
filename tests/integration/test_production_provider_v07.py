@@ -73,6 +73,39 @@ def make_project(tmp_path):
     return project
 
 
+def seed_foundation(project):
+    story_path = project / ".codex-writer" / "story" / "故事合同.json"
+    story = json.loads(story_path.read_text(encoding="utf-8"))
+    story["core"] = {
+        "one_sentence_pitch": "A disgraced cultivator rebuilds his path through a concrete revenge vow.",
+        "core_tone": "sharp, escalating, contract-first xianxia",
+        "main_conflict": "Xiao Heng must expose the sect conspiracy before his stolen foundation collapses.",
+        "reader_promise": ["clear cultivation gains", "stable power rules", "escalating enemies"],
+    }
+    story["hard_rules"] = ["No realm jump without cost."]
+    story["world_rules"] = ["Spirit roots determine safe qi intake and backlash risk."]
+    story["main_characters"] = [{"name": "Xiao Heng", "role": "protagonist", "motivation": "restore his stolen foundation"}]
+    story["style_rules"] = ["End each chapter on a new threat, cost, or resource."]
+    story["forbidden_patterns"] = ["Do not solve conflicts with unexplained hidden masters."]
+    story_path.write_text(json.dumps(story, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    volume_path = project / ".codex-writer" / "story" / "volumes" / "第001卷合同.json"
+    volume = json.loads(volume_path.read_text(encoding="utf-8"))
+    volume.update({
+        "title": "Blackwater Awakening",
+        "goal": "Xiao Heng survives the opening conspiracy and claims the bronze token.",
+        "key_milestones": ["public humiliation", "bronze token discovery", "sealed gate opens"],
+        "characters_introduced": ["Xiao Heng", "Blackwater Elder"],
+        "ending_hook": "The sect learns the stolen foundation is still alive.",
+    })
+    volume_path.write_text(json.dumps(volume, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    (project / "设定" / "世界观.md").write_text("灵根、灵脉、境界反噬构成修行物理。", encoding="utf-8")
+    (project / "设定" / "人物卡.md").write_text("萧衡：被夺根基后以复仇和自证为动机。", encoding="utf-8")
+    (project / "大纲" / "总纲.md").write_text("全书围绕夺回根基、揭开宗门旧案、重定仙途规则推进。", encoding="utf-8")
+    (project / "大纲" / "第001卷纲.md").write_text("第一卷完成弱势开局、资源发现、第一轮敌人压迫。", encoding="utf-8")
+
+
 def set_route(project, agent, provider="openai_compatible", model="writer-test"):
     path = agent_router_path(project)
     router = json.loads(path.read_text(encoding="utf-8"))
@@ -109,6 +142,7 @@ def test_production_preflight_requires_external_planning_and_draft_routes(tmp_pa
 
 def test_plan_production_uses_openai_compatible_provider(tmp_path):
     project = make_project(tmp_path)
+    seed_foundation(project)
     set_route(project, "planning_agent")
     brief = {
         "meta": {"schema_version": "codex-writer/chapter-brief/v1"},
