@@ -88,7 +88,9 @@ def test_state_word_count_uses_full_chapter_text_not_truncated_summary(tmp_path)
     state = json.loads((project / ".codex-writer" / "state.json").read_text(encoding="utf-8"))
     commit = json.loads(commit_path(project, 1).read_text(encoding="utf-8"))
     assert len(commit["summary_text"]) < len(chapter_text)
-    assert state["chapters"]["1"]["word_count"] == len(chapter_text)
+    # word_count now counts Chinese chars only (not raw len)
+    from codex_writer.projections.state import _count_chinese_chars
+    assert state["chapters"]["1"]["word_count"] == _count_chinese_chars(chapter_text)
 
 
 def test_events_are_written_to_json_and_sqlite(tmp_path):

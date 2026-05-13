@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -6,6 +7,12 @@ from codex_writer.core.io import write_json_atomic
 from codex_writer.core.paths import agent_run_dir
 from codex_writer.observability.usage import estimate_usage, append_usage
 from codex_writer.storage.db import insert_agent_run
+
+# When set to a truthy value, agent run records omit the raw input/output text.
+# This prevents large model outputs from accumulating in .codex-writer/agents/运行记录/.
+_NO_STORE_RAW = os.environ.get("CODEX_WRITER_NO_STORE_RAW", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 
 
 def write_agent_run(project_root: Path, record: dict,
@@ -25,6 +32,16 @@ def write_agent_run(project_root: Path, record: dict,
     )
     if not record.get("usage"):
         record["usage"] = usage_data
+
+    if _NO_STORE_RAW:
+        # Omit raw text to reduce disk usage; usage stats are preserved.
+        record.pop("input_text", None)
+        record.pop("output_text", None)
+    else:
+        if input_text:
+            record.setdefault("input_text", input_text)
+        if output_text:
+            record.setdefault("output_text", output_text)
 
     write_json_atomic(path, record)
     insert_agent_run(project_root, record)

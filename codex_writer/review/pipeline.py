@@ -366,6 +366,159 @@ def _check_character_consistency(project_root: Path, text: str, chapter: int) ->
     return issues
 
 
+def _check_word_count(project_root: Path, text: str, chapter: int) -> list[dict]:
+    """Block if actual word count deviates severely from target_words in the brief."""
+    issues = []
+    try:
+        brief = read_json(chapter_brief_path(project_root, chapter))
+        target = int(brief.get("target_words") or 0)
+    except (OSError, ValueError, TypeError):
+        return issues
+    if target <= 0:
+        return issues
+
+    # Count Chinese characters + common Chinese punctuation (exclude whitespace &
+    # Markdown structural characters such as #, *, >, ─, etc.).
+    actual = sum(
+        1 for ch in text
+        if "\u4e00" <= ch <= "\u9fff"
+        or "\u3000" <= ch <= "\u303f"  # CJK symbols & punctuation
+        or "\uff00" <= ch <= "\uffef"  # fullwidth forms
+    )
+    if actual == 0:
+        return issues
+
+    ratio = actual / target
+    if ratio < 0.5:
+        issues.append({
+            "severity": "high",
+            "category": "word_count",
+            "location": "全文",
+            "description": (
+                f"实际字数 {actual} 距目标 {target} 偏差 {1 - ratio:.0%}，"
+                "疑似模型截断或提前收尾（blocking）"
+            ),
+            "evidence": f"actual={actual} target={target}",
+            "fix_hint": "检查 max_tokens 设置，或要求模型补写剩余内容",
+            "blocking": True,
+            "chapter": chapter,
+        })
+    elif ratio < 0.7:
+        issues.append({
+            "severity": "medium",
+            "category": "word_count",
+            "location": "全文",
+            "description": f"实际字数 {actual} 距目标 {target} 偏差 {1 - ratio:.0%}，章节偏短",
+            "evidence": f"actual={actual} target={target}",
+            "fix_hint": "适当扩写场景细节或对话",
+            "blocking": False,
+            "chapter": chapter,
+        })
+    return issues
+
+
+def _check_entity_state_consistency(project_root: Path, text: str, chapter: int) -> list[dict]:
+    """Warn if an entity that is recorded as dead/removed appears in the chapter text.
+
+    Reads the ``state_changes`` table from index.sqlite.  Only reports when
+    the entity name actually appears verbatim in the prose.
+    """
+    issues = []
+    try:
+        from codex_writer.storage.db import connect_db
+        with connect_db(project_root) as conn:
+            rows = conn.execute(
+                """
+                SELECT entity_id, field, new_value, chapter AS changed_chapter
+                FROM state_changes
+                WHERE field IN ('status', 'alive', 'state')
+                  AND new_value IN ('dead', 'deceased', '死亡', '消失', 'removed', '被消灭')
+                  AND chapter < ?
+                """,
+                (chapter,),
+            ).fetchall()
+    except Exception:
+        return issues
+
+    for row in rows:
+        entity_id = row["entity_id"]
+        changed_ch = row["changed_chapter"]
+        if entity_id in text:
+            issues.append({
+                "severity": "high",
+                "category": "continuity",
+                "location": f"角色/实体: {entity_id}",
+                "description": (
+                    f"实体「{entity_id}」在第{changed_ch}章已标记为「{row['new_value']}」，"
+                    f"但在第{chapter}章正文中仍出现"
+                ),
+                "evidence": "",
+                "fix_hint": f"确认第{chapter}章对「{entity_id}」的处理是否符合第{changed_ch}章设定",
+                "blocking": False,
+                "chapter": chapter,
+            })
+    return issues
+
+
+# Minimum number of preceding chapters to check for cool-point cadence.
+_COOL_POINT_CADENCE_WINDOW = 5
+
+
+def _check_cool_point_cadence(project_root: Path, chapter: int) -> list[dict]:
+    """Warn if no cool point has been detected in the last N chapters.
+
+    Reads review results from disk to check whether recent chapters had cool
+    points.  Only fires when there are enough committed review results.
+    """
+    issues = []
+    from codex_writer.core.paths import review_result_path as rrp
+    no_cool = 0
+    checked = 0
+    for offset in range(1, _COOL_POINT_CADENCE_WINDOW + 1):
+        prev = chapter - offset
+        if prev < 1:
+            break
+        rp = rrp(project_root, prev)
+        if not rp.exists():
+            continue
+        try:
+            data = read_json(rp)
+            prev_issues = data.get("issues", [])
+            has_cool = any(i.get("category") == "logic" and "爽点" not in i.get("description", "") for i in prev_issues)
+            # Count chapters that had no cool_point detected (category=logic, description contains 爽点)
+            missing_cool = not any(
+                i.get("category") == "logic" and "未检测到爽点" not in i.get("description", "")
+                for i in prev_issues
+                if i.get("category") == "logic" and "爽点" in i.get("description", "")
+            )
+            # Simpler: just look for absence of cool-point detection issue being absent
+            # i.e. a chapter had no cool-point warning means it DID have a cool point
+            had_no_cool_issue = any(
+                "未检测到爽点" in i.get("description", "") for i in prev_issues
+            )
+            if had_no_cool_issue:
+                no_cool += 1
+            checked += 1
+        except (OSError, ValueError, TypeError):
+            pass
+
+    if checked >= 3 and no_cool >= checked:
+        issues.append({
+            "severity": "medium",
+            "category": "pacing",
+            "location": "近期章节",
+            "description": (
+                f"最近 {checked} 章均未检测到爽点（兑现/反转/打脸/震惊），"
+                "可能导致读者流失，建议本章或下章安排一个中型兑现"
+            ),
+            "evidence": f"连续 {no_cool} 章无爽点",
+            "fix_hint": "在本章中加入至少一处兑现、反转、打脸或震惊事件",
+            "blocking": False,
+            "chapter": chapter,
+        })
+    return issues
+
+
 def review_chapter(project_root: Path, chapter: int, chapter_text: str) -> dict:
     issues = []
 
@@ -395,12 +548,15 @@ def review_chapter(project_root: Path, chapter: int, chapter_text: str) -> dict:
         })
 
     issues.extend(_check_ai_flavor(chapter_text, chapter))
+    issues.extend(_check_word_count(project_root, chapter_text, chapter))
     issues.extend(_check_cool_points(chapter_text, chapter))
     issues.extend(_check_chapter_end_hook(chapter_text, chapter))
     issues.extend(_check_pacing(chapter_text, chapter))
     issues.extend(_check_continuity(project_root, chapter, chapter_text))
     issues.extend(_check_setting_consistency(project_root, chapter_text, chapter))
     issues.extend(_check_character_consistency(project_root, chapter_text, chapter))
+    issues.extend(_check_entity_state_consistency(project_root, chapter_text, chapter))
+    issues.extend(_check_cool_point_cadence(project_root, chapter))
 
     try:
         from codex_writer.reading_power.tracker import get_debt_summary, detect_hooks_from_text
