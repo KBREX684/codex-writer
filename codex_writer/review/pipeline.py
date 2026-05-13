@@ -377,14 +377,10 @@ def _check_word_count(project_root: Path, text: str, chapter: int) -> list[dict]
     if target <= 0:
         return issues
 
-    # Count Chinese characters + common Chinese punctuation (exclude whitespace &
-    # Markdown structural characters such as #, *, >, ─, etc.).
-    actual = sum(
-        1 for ch in text
-        if "\u4e00" <= ch <= "\u9fff"
-        or "\u3000" <= ch <= "\u303f"  # CJK symbols & punctuation
-        or "\uff00" <= ch <= "\uffef"  # fullwidth forms
-    )
+    # Use the shared counter so the review check agrees with the committed
+    # word count in state.json (which also uses _count_chinese_chars).
+    from codex_writer.projections.state import _count_chinese_chars
+    actual = _count_chinese_chars(text)
     if actual == 0:
         return issues
 

@@ -16,7 +16,10 @@ def _count_chinese_chars(text: str) -> int:
         if "\u4e00" <= ch <= "\u9fff"          # CJK unified ideographs
         or "\u3000" <= ch <= "\u303f"           # CJK symbols & punctuation
         or "\uff00" <= ch <= "\uffef"           # Fullwidth Latin / halfwidth Katakana
-        or ch in "，。！？；：""''（）【】《》——…"   # Common Chinese punctuation
+        # Punctuation not covered by the ranges above that appear in novels:
+        # U+201C/201D = curly double quotes (dialogue), U+2018/2019 = curly single quotes,
+        # U+2014 = em dash, U+2026 = ellipsis
+        or ch in "\u201c\u201d\u2018\u2019\u2014\u2026"
     )
 
 
@@ -67,7 +70,13 @@ def update_state_from_commit(project_root: Path, commit: dict) -> None:
 
     if status == "accepted":
         state["current_chapter"] = max(state.get("current_chapter", 0), chapter)
-        total = sum(ch.get("word_count", 0) for ch in state["chapters"].values() if ch.get("status") == "accepted")
-        state["total_word_count"] = total
+
+    # Always recalculate total_word_count so that status changes such as
+    # "reverted" correctly exclude the chapter from the running total.
+    state["total_word_count"] = sum(
+        ch.get("word_count", 0)
+        for ch in state["chapters"].values()
+        if ch.get("status") == "accepted"
+    )
 
     write_json_atomic(state_path(project_root), state)

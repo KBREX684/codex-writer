@@ -333,6 +333,123 @@ class TestEntityStateConsistency:
 
 
 # ---------------------------------------------------------------------------
+# Bug-fix regression: word count consistency between review and state
+# ---------------------------------------------------------------------------
+
+class TestWordCountConsistency:
+    """Review's _check_word_count must use the same counter as state.py."""
+
+    def _make_brief(self, tmp_path: Path, chapter: int, target_words: int):
+        import json
+        cw = tmp_path / ".codex-writer"
+        (cw / "story" / "chapters").mkdir(parents=True, exist_ok=True)
+        brief = {
+            "meta": {"schema_version": "codex-writer/chapter-brief/v1"},
+            "chapter": chapter, "title": "测试", "target_words": target_words,
+        }
+        (cw / "story" / "chapters" / f"第{chapter:04d}章任务书.json").write_text(
+            json.dumps(brief, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def test_curly_quotes_counted_in_review(self, tmp_path):
+        """U+201C/201D/2018/2019 and U+2014/2026 must be counted by pipeline."""
+        from codex_writer.review.pipeline import _check_word_count
+        from codex_writer.projections.state import _count_chinese_chars
+        self._make_brief(tmp_path, 1, 5000)
+        # 1000 CJK chars + 6 special punctuation chars
+        text = "字" * 1000 + "\u201c\u201d\u2018\u2019\u2014\u2026"
+        expected = _count_chinese_chars(text)
+        assert expected == 1006, f"_count_chinese_chars should count 1006, got {expected}"
+        issues = _check_word_count(tmp_path, text, 1)
+        # 1006/5000 = ~20%, definitely blocking
+        high_issues = [i for i in issues if i["blocking"]]
+        assert high_issues
+        evidence = high_issues[0]["evidence"]
+        import re
+        m = re.search(r"actual=(\d+)", evidence)
+        assert m, "evidence should contain actual=..."
+        assert int(m.group(1)) == expected, (
+            f"Review actual={m.group(1)} != state._count_chinese_chars={expected}; "
+            "counters are inconsistent"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bug-fix regression: chapter revert reduces total_word_count
+# ---------------------------------------------------------------------------
+
+class TestChapterRevertWordCount:
+    """After revert, total_word_count in state.json must decrease."""
+
+    def _write_state(self, cw: Path, chapters: dict):
+        import json
+        total = sum(c["word_count"] for c in chapters.values() if c["status"] == "accepted")
+        state = {
+            "meta": {"schema_version": "codex-writer/state/v1"},
+            "total_word_count": total,
+            "current_chapter": max((int(k) for k in chapters), default=0),
+            "current_volume": 1,
+            "chapters": {str(k): v for k, v in chapters.items()},
+            "story_status": "writing",
+        }
+        (cw / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        return state
+
+    def _write_commit(self, cw: Path, chapter: int, status: str):
+        import json
+        commit = {
+            "meta": {"schema_version": "codex-writer/chapter-commit/v1",
+                     "chapter": chapter, "status": status},
+            "refs": {}, "checks": {}, "accepted_events": [], "state_deltas": [],
+            "entity_deltas": [], "summary_text": "",
+            "projection_status": {"state": "done", "summary": "done", "memory": "done", "index": "done"},
+        }
+        commits_dir = cw / "commits"
+        commits_dir.mkdir(parents=True, exist_ok=True)
+        (commits_dir / f"第{chapter:04d}章提交.json").write_text(
+            json.dumps(commit, ensure_ascii=False), encoding="utf-8"
+        )
+        return commit
+
+    def test_revert_decrements_total(self, tmp_path):
+        from codex_writer.projections.state import update_state_from_commit
+        import json
+        cw = tmp_path / ".codex-writer"
+        cw.mkdir(parents=True, exist_ok=True)
+        # Two accepted chapters, each 1000 words.
+        self._write_state(cw, {
+            1: {"chapter": 1, "status": "accepted", "word_count": 1000,
+                "commit_path": ".codex-writer/commits/第0001章提交.json"},
+            2: {"chapter": 2, "status": "accepted", "word_count": 1500,
+                "commit_path": ".codex-writer/commits/第0002章提交.json"},
+        })
+        # Revert chapter 1.
+        commit = self._write_commit(cw, 1, "reverted")
+        update_state_from_commit(tmp_path, commit)
+        state = json.loads((cw / "state.json").read_text(encoding="utf-8"))
+        # Chapter 1 is reverted — should not count.
+        assert state["total_word_count"] == 1500, (
+            f"total_word_count should be 1500 after revert, got {state['total_word_count']}"
+        )
+        assert state["chapters"]["1"]["status"] == "reverted"
+
+    def test_reject_does_not_add_to_total(self, tmp_path):
+        from codex_writer.projections.state import update_state_from_commit
+        import json
+        cw = tmp_path / ".codex-writer"
+        cw.mkdir(parents=True, exist_ok=True)
+        self._write_state(cw, {
+            1: {"chapter": 1, "status": "accepted", "word_count": 1000,
+                "commit_path": ".codex-writer/commits/第0001章提交.json"},
+        })
+        commit = self._write_commit(cw, 2, "rejected")
+        update_state_from_commit(tmp_path, commit)
+        state = json.loads((cw / "state.json").read_text(encoding="utf-8"))
+        # Chapter 2 is rejected — should not add to total.
+        assert state["total_word_count"] == 1000
+
+
+# ---------------------------------------------------------------------------
 # Word count normalisation
 # ---------------------------------------------------------------------------
 
@@ -349,6 +466,30 @@ class TestWordCountNormalisation:
         count = _count_chinese_chars(text)
         # 他说你好 (4 chars) + 3 punctuation （：""。）= 7 or more
         assert count >= 4
+
+    def test_curly_double_quotes_counted(self):
+        """U+201C and U+201D (dialogue quotes) must be counted."""
+        from codex_writer.projections.state import _count_chinese_chars
+        assert _count_chinese_chars("\u201c") == 1, "left curly double quote must be counted"
+        assert _count_chinese_chars("\u201d") == 1, "right curly double quote must be counted"
+
+    def test_curly_single_quotes_counted(self):
+        """U+2018 and U+2019 (inner dialogue quotes) must be counted."""
+        from codex_writer.projections.state import _count_chinese_chars
+        assert _count_chinese_chars("\u2018") == 1, "left curly single quote must be counted"
+        assert _count_chinese_chars("\u2019") == 1, "right curly single quote must be counted"
+
+    def test_em_dash_and_ellipsis_counted(self):
+        """U+2014 (em dash) and U+2026 (ellipsis) must be counted."""
+        from codex_writer.projections.state import _count_chinese_chars
+        assert _count_chinese_chars("\u2014") == 1, "em dash must be counted"
+        assert _count_chinese_chars("\u2026") == 1, "ellipsis must be counted"
+
+    def test_ascii_quotes_not_counted(self):
+        """ASCII apostrophe and double-quote must NOT be counted."""
+        from codex_writer.projections.state import _count_chinese_chars
+        assert _count_chinese_chars("'") == 0, "ASCII apostrophe must not be counted"
+        assert _count_chinese_chars('"') == 0, 'ASCII double-quote must not be counted'
 
     def test_empty_text(self):
         from codex_writer.projections.state import _count_chinese_chars
