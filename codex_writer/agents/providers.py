@@ -194,6 +194,9 @@ class OpenAICompatibleProvider:
             text, finish_reason = _extract_completion_text(raw)
 
             # Empty-output reroll: retry if model returned nothing (transient).
+            # Empty retries share the same attempt budget as HTTP-error retries.
+            # With _MAX_EMPTY_RETRIES=2 and _MAX_RETRIES=3: attempts 1 and 2 may
+            # continue for empty output; attempt 3 returns the (empty) result.
             if not text.strip() and attempt <= _MAX_EMPTY_RETRIES:
                 time.sleep(delay)
                 delay *= 2

@@ -17,8 +17,8 @@ def _count_chinese_chars(text: str) -> int:
         or "\u3000" <= ch <= "\u303f"           # CJK symbols & punctuation
         or "\uff00" <= ch <= "\uffef"           # Fullwidth Latin / halfwidth Katakana
         # Punctuation not covered by the ranges above that appear in novels:
-        # U+201C/201D = curly double quotes (dialogue), U+2018/2019 = curly single quotes,
-        # U+2014 = em dash, U+2026 = ellipsis
+        # \u201c/\u201d = curly double quotes (dialogue), \u2018/\u2019 = curly single quotes,
+        # \u2014 = em dash, \u2026 = ellipsis
         or ch in "\u201c\u201d\u2018\u2019\u2014\u2026"
     )
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from codex_writer.core.paths import codex_writer_dir
 
-# Backup every N chapters by default (full copy only once per interval).
+# Trigger a backup every N chapters by default (configurable via env var).
 _DEFAULT_BACKUP_INTERVAL = int(os.environ.get("CODEX_WRITER_BACKUP_INTERVAL", "10"))
 
 

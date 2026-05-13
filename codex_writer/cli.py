@@ -1686,12 +1686,16 @@ def cmd_produce(args):
 
     * --resume  : skip chapters that are already accepted in state.json
     * --retry N : retry failed chapters up to N times (default 2)
-    * --delay S : minimum seconds between chapter calls (default 0)
+    * --delay S : minimum seconds between chapter calls / QPS throttle (default 0).
+                  On transient failures (rc!=3), a fixed 2-second back-off is used
+                  regardless of --delay to avoid tight retry loops.
     """
     import time as _time
     from pathlib import Path
     from codex_writer.core.io import read_json
     from codex_writer.core.paths import state_path, chapter_brief_path
+
+    _RETRY_BACKOFF = 2.0  # seconds to wait between failure retries (independent of --delay)
 
     project_root = Path(args.project_root).resolve()
     from_ch = int(args.from_chapter)
@@ -1747,9 +1751,9 @@ def cmd_produce(args):
             if rc == 3:
                 # Review blocking or foundation error — no point retrying.
                 break
-            # rc==5 (provider failure) or rc==1: retry after delay.
+            # rc==5 (provider failure) or rc==1: retry after back-off.
             if attempt <= max_retries:
-                _time.sleep(inter_delay or 2.0)
+                _time.sleep(_RETRY_BACKOFF)
 
         entry = {"chapter": ch, "status": "ok" if last_code == 0 else "failed",
                  "exit_code": last_code, "attempts": attempt}
