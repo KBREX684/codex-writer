@@ -105,6 +105,12 @@ _EXTRACT_AGENT_PROMPT = "\n".join([
 _BIBLE_PLANNING_PROMPT = "\n".join([
     "你是百万字网文架构专家（bible planning_agent）。",
     "任务：根据作者提供的前提和偏好，生成完整的「百万字创作圣经」JSON。",
+    "【硬性规模约束——不得违反】",
+    "  target_scale.target_words ≥ 1000000（一百万汉字）",
+    "  target_scale.target_chapters ≥ 300",
+    "  target_scale.volume_count ≥ 5",
+    "  sections.volume_roadmap.volumes 列表长度必须等于 target_scale.volume_count",
+    "  每卷 chapters 字段表示该卷章节数，所有卷章节数之和应等于 target_scale.target_chapters",
     "必须覆盖：project_positioning、global_story（主线/暗线/三幕结构/分卷里程碑）、",
     "  world_system（地理/社会秩序/资源经济/势力/硬规则）、",
     "  power_system（体系类型/境界序列/突破规则/代价与限制）、",
@@ -115,6 +121,7 @@ _BIBLE_PLANNING_PROMPT = "\n".join([
     "  reading_power（爽点节奏/钩子策略/兑现周期）、",
     "  style_contract（文风/视角/禁区）、",
     "  runtime_contract（章节任务书策略/审查规则）。",
+    "全部字段必须用具体内容填充，禁止留空字符串或空列表。",
     "输出纯 JSON，不含 markdown 代码块，不含 approval 字段（由系统填充）。",
     _BOUNDARY,
 ])

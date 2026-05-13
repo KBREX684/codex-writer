@@ -1,62 +1,107 @@
 import hashlib
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from codex_writer.core.paths import codex_writer_dir
 
+# Trigger a backup every N chapters by default (configurable via env var).
+_DEFAULT_BACKUP_INTERVAL = int(os.environ.get("CODEX_WRITER_BACKUP_INTERVAL", "10"))
 
-def create_backup_manifest(project_root: Path, reason: str = "") -> dict:
+
+def _last_backup_manifest(cw: Path) -> dict:
+    """Return the most recent backup manifest, or empty dict if none exists."""
+    backups_dir = cw / "backups"
+    if not backups_dir.exists():
+        return {}
+    dirs = sorted(backups_dir.iterdir(), reverse=True)
+    for d in dirs:
+        manifest_path = d / "manifest.json"
+        if manifest_path.exists():
+            try:
+                return json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+    return {}
+
+
+def _known_sha256s(manifest: dict) -> dict[str, str]:
+    """Return {relative_path: sha256} for files in a backup manifest."""
+    return {entry["path"]: entry["sha256"] for entry in manifest.get("files", [])}
+
+
+def create_backup_manifest(
+    project_root: Path,
+    reason: str = "",
+    incremental: bool = True,
+) -> dict:
+    """Create a backup of the project's write-after truth sources.
+
+    When *incremental* is True (the default) files that have not changed since
+    the last backup are skipped.  A full copy is always used for the very first
+    backup, or when *incremental* is False.
+    """
     cw = codex_writer_dir(project_root)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     backup_dir = cw / "backups" / timestamp
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    files_to_backup = ["state.json", "memory.json", "project.json"]
+    last_shas = _known_sha256s(_last_backup_manifest(cw)) if incremental else {}
+
+    def _copy_if_changed(src: Path, rel: str) -> dict | None:
+        if not src.exists():
+            return None
+        current_sha = _sha256(src)
+        if incremental and last_shas.get(rel) == current_sha:
+            return None  # unchanged – skip
+        dst = backup_dir / Path(rel.replace(".codex-writer/", ""))
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(src), str(dst))
+        return {"path": rel, "sha256": current_sha}
+
     manifest_files = []
 
-    for fname in files_to_backup:
-        src = cw / fname
-        if src.exists():
-            dst = backup_dir / fname
-            shutil.copy2(str(src), str(dst))
-            manifest_files.append({
-                "path": f".codex-writer/{fname}",
-                "sha256": _sha256(dst)
-            })
+    for fname in ["state.json", "memory.json", "project.json"]:
+        entry = _copy_if_changed(cw / fname, f".codex-writer/{fname}")
+        if entry:
+            manifest_files.append(entry)
 
     for sub in ["commits", "summaries", "events"]:
         src_dir = cw / sub
         if src_dir.exists():
-            dst_dir = backup_dir / sub
-            dst_dir.mkdir(exist_ok=True)
             for f in src_dir.iterdir():
                 if f.is_file():
-                    dst = dst_dir / f.name
-                    shutil.copy2(str(f), str(dst))
-                    manifest_files.append({
-                        "path": f".codex-writer/{sub}/{f.name}",
-                        "sha256": _sha256(dst)
-                    })
+                    entry = _copy_if_changed(f, f".codex-writer/{sub}/{f.name}")
+                    if entry:
+                        manifest_files.append(entry)
 
-    src_db = project_root / ".codex-writer" / "index.sqlite"
-    if src_db.exists():
-        dst_db = backup_dir / "index.sqlite"
-        shutil.copy2(str(src_db), str(dst_db))
-        manifest_files.append({
-            "path": ".codex-writer/index.sqlite",
-            "sha256": _sha256(dst_db)
-        })
+    src_db = cw / "index.sqlite"
+    entry = _copy_if_changed(src_db, ".codex-writer/index.sqlite")
+    if entry:
+        manifest_files.append(entry)
 
     manifest = {
         "backup_id": timestamp,
         "reason": reason,
+        "incremental": incremental,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "files": manifest_files
+        "files": manifest_files,
     }
-    (backup_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (backup_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return manifest
+
+
+def should_run_backup(chapter: int, interval: int = _DEFAULT_BACKUP_INTERVAL) -> bool:
+    """Return True if a backup should run for this chapter number.
+
+    Backups are triggered on the first chapter (1) and every *interval*
+    chapters thereafter (e.g. 1, 10, 20, 30 …).
+    """
+    return chapter == 1 or chapter % interval == 0
 
 
 def _sha256(path: Path) -> str:

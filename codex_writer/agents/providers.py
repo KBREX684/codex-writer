@@ -15,6 +15,8 @@ MOCK_PROVIDER = "mock"
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0   # seconds; doubles on each attempt
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# Extra attempts when the model returns an empty response (model-side fluke).
+_MAX_EMPTY_RETRIES = 2
 
 
 class ProviderConfigurationError(Exception):
@@ -28,7 +30,8 @@ class ModelProvider(Protocol):
 
 class CodexProvider:
     def generate(self, task: dict) -> dict:
-        return {"text": "", "json": {}, "raw": {}, "usage": {"provider": "codex"}, "error": None}
+        return {"text": "", "json": {}, "raw": {}, "usage": {"provider": "codex"},
+                "error": None, "warnings": [], "finish_reason": ""}
 
 
 class MockProvider:
@@ -38,7 +41,8 @@ class MockProvider:
     def generate(self, task: dict) -> dict:
         raw = self._output
         parsed = parse_json_content(raw)
-        return {"text": raw, "json": parsed, "raw": raw, "usage": {"provider": "mock"}, "error": None}
+        return {"text": raw, "json": parsed, "raw": raw, "usage": {"provider": "mock"},
+                "error": None, "warnings": [], "finish_reason": "stop"}
 
 
 def is_external_provider(provider: str) -> bool:
@@ -187,20 +191,40 @@ class OpenAICompatibleProvider:
             except json.JSONDecodeError:
                 return _provider_error("Provider returned invalid JSON")
 
-            text = _extract_completion_text(raw)
+            text, finish_reason = _extract_completion_text(raw)
+
+            # Empty-output reroll: retry if model returned nothing (transient).
+            # Empty retries share the same attempt budget as HTTP-error retries.
+            # With _MAX_EMPTY_RETRIES=2 and _MAX_RETRIES=3: attempts 1 and 2 may
+            # continue for empty output; attempt 3 returns the (empty) result.
+            if not text.strip() and attempt <= _MAX_EMPTY_RETRIES:
+                time.sleep(delay)
+                delay *= 2
+                continue
+
+            warnings = []
+            if finish_reason == "length":
+                warnings.append(
+                    "模型输出因达到 max_tokens 上限而截断（finish_reason=length）；"
+                    "请提高 CODEX_WRITER_OPENAI_COMPATIBLE_MAX_TOKENS 或检查章节长度设置"
+                )
+
             return {
                 "text": text,
                 "json": parse_json_content(text),
                 "raw": raw,
                 "usage": raw.get("usage", {}),
                 "error": None,
+                "warnings": warnings,
+                "finish_reason": finish_reason,
             }
 
         return _provider_error(last_error)
 
 
 def _provider_error(message: str) -> dict:
-    return {"text": "", "json": {}, "raw": {}, "usage": {}, "error": message}
+    return {"text": "", "json": {}, "raw": {}, "usage": {}, "error": message,
+            "warnings": [], "finish_reason": ""}
 
 
 def _chat_completions_url(base_url: str) -> str:
@@ -210,17 +234,33 @@ def _chat_completions_url(base_url: str) -> str:
     return base + "/chat/completions"
 
 
-def _extract_completion_text(raw: dict) -> str:
+def _extract_completion_text(raw: dict) -> tuple[str, str]:
+    """Return (text, finish_reason) from an OpenAI-compatible response.
+
+    Handles both the classic ``message.content: str`` format and the newer
+    ``message.content: [{type: "text", text: "..."}]`` array format used by
+    some providers (e.g. Anthropic-compatible endpoints).
+    """
     choices = raw.get("choices") or []
     if not choices:
-        return ""
+        return "", ""
     first = choices[0] or {}
+    finish_reason = first.get("finish_reason") or ""
     message = first.get("message") or {}
-    if isinstance(message.get("content"), str):
-        return message["content"]
+    content = message.get("content")
+    if isinstance(content, str):
+        return content, finish_reason
+    # Array content format: [{type: "text", text: "..."}]
+    if isinstance(content, list):
+        parts = [
+            part.get("text", "") for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        return "".join(parts), finish_reason
+    # Legacy non-message format
     if isinstance(first.get("text"), str):
-        return first["text"]
-    return ""
+        return first["text"], finish_reason
+    return "", finish_reason
 
 
 def _effective_model(settings: Settings, model: str = "") -> str:

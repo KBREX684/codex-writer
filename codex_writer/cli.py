@@ -557,6 +557,14 @@ def cmd_bible(args):
                 "blocking": True,
                 "missing": report["missing"],
             })
+        # Run schema-level validation on the target_scale constraints.
+        try:
+            from codex_writer.schemas.validators import validate_novel_bible as _val_bible
+            scale_errors = _val_bible(bible)
+            for err in scale_errors:
+                errors.append({"code": "BIBLE_SCHEMA_VIOLATION", "message": err, "blocking": False})
+        except ImportError:
+            pass
         output_json(
             "bible",
             ok=not errors,
@@ -706,6 +714,19 @@ def cmd_plan(args):
             return 5
 
         brief = _normalize_chapter_brief(result["json"], chapter, brief_title, fallback=brief)
+
+        # Validate the AI-generated brief against the schema.
+        try:
+            from codex_writer.schemas.validators import validate_chapter_brief
+            schema_errors = validate_chapter_brief(brief)
+            if schema_errors:
+                output_json("plan", ok=False, project_root=str(project_root),
+                            errors=[{"code": "INVALID_CHAPTER_BRIEF",
+                                     "message": "; ".join(schema_errors), "blocking": True}])
+                return 2
+        except ImportError:
+            pass
+
         suggestions["production_provider"] = {
             "agent": "planning_agent",
             "provider": resolution["provider"],
@@ -818,6 +839,7 @@ def cmd_write(args):
     draft_model = "default"
     draft_usage = {}
     draft_input_text = ""
+    draft_result: dict = {}
     if production:
         from codex_writer.agents.execution import payload_chars, resolve_agent_provider
         from codex_writer.agents.prompts import build_agent_prompt
@@ -857,6 +879,7 @@ def cmd_write(args):
             "task_prompt": draft_input_text,
             "temperature": 0.75,
         })
+        draft_result = result
         provider_errors = _provider_failure_errors(result, "draft_agent returned empty prose")
         if provider_errors:
             errors.extend(provider_errors)
@@ -894,15 +917,11 @@ def cmd_write(args):
         output_json("write", ok=False, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
         return 3
 
-    log_workflow(project_root, run_id, chapter, "reviewed", "polished", "polish_agent", "")
-    write_agent_run(project_root, {
-        "task_id": f"ch{chapter:04d}-polish_agent-run_{run_id}",
-        "run_id": run_id, "chapter": chapter,
-        "agent": "polish_agent", "provider": "codex", "model": "default",
-        "status": "completed", "input_refs": [], "usage": {}, "errors": []
-    })
+    # Propagate any provider warnings (e.g. truncation) from the draft step.
+    if draft_result.get("warnings"):
+        warnings.extend([{"code": "PROVIDER_WARNING", "message": w} for w in draft_result["warnings"]])
 
-    log_workflow(project_root, run_id, chapter, "polished", "extracted", "extract_agent", "")
+    log_workflow(project_root, run_id, chapter, "reviewed", "extracted", "extract_agent", "")
     extract_provider = "codex"
     extract_model = "default"
     extract_usage = {}
@@ -912,7 +931,7 @@ def cmd_write(args):
         extraction = _external_extract_chapter(project_root, chapter, title, brief, draft_text)
         if not extraction["ok"]:
             errors.extend(extraction["errors"])
-            log_workflow(project_root, run_id, chapter, "polished", "blocked", "extract_agent", "")
+            log_workflow(project_root, run_id, chapter, "reviewed", "blocked", "extract_agent", "")
             output_json("write", ok=False, project_root=str(project_root), run_id=run_id, warnings=warnings, errors=errors)
             return extraction["exit_code"]
         extract_result = extraction["result"]
@@ -1613,6 +1632,155 @@ def cmd_learn(args):
     return 0
 
 
+def cmd_chapter(args):
+    """Sub-commands for chapter lifecycle management."""
+    from pathlib import Path
+    project_root = Path(args.project_root).resolve()
+    sub = args.chapter_command
+
+    if sub == "revert":
+        chapter = int(args.chapter)
+        from codex_writer.core.io import read_json, write_json_atomic
+        from codex_writer.core.paths import commit_path
+        from codex_writer.projections.state import update_state_from_commit
+
+        cp = commit_path(project_root, chapter)
+        if not cp.exists():
+            output_json("chapter", ok=False, project_root=str(project_root),
+                        errors=[{"code": "COMMIT_MISSING",
+                                 "message": f"第{chapter}章提交文件不存在，无法回退", "blocking": True}])
+            return 3
+        commit = read_json(cp)
+        if commit["meta"].get("status") == "reverted":
+            output_json("chapter", ok=False, project_root=str(project_root),
+                        errors=[{"code": "ALREADY_REVERTED",
+                                 "message": f"第{chapter}章已处于 reverted 状态", "blocking": False}])
+            return 0
+
+        reason = getattr(args, "reason", "") or ""
+        from datetime import datetime, timezone as _tz
+        commit["meta"]["status"] = "reverted"
+        commit["meta"]["reverted_at"] = datetime.now(_tz.utc).isoformat()
+        commit["meta"]["revert_reason"] = reason
+        commit["projection_status"] = {"state": "pending", "summary": "pending",
+                                        "memory": "pending", "index": "pending"}
+        write_json_atomic(cp, commit)
+        # Update state.json so total_word_count drops this chapter.
+        try:
+            update_state_from_commit(project_root, commit)
+        except Exception:
+            pass
+        output_json("chapter", project_root=str(project_root),
+                    data={"chapter": chapter, "status": "reverted", "reason": reason})
+        return 0
+
+    output_json("chapter", ok=False, project_root=str(project_root),
+                errors=[{"code": "INVALID_SUBCOMMAND",
+                         "message": "Use: chapter revert --chapter N [--reason '...']",
+                         "blocking": True}])
+    return 2
+
+
+def cmd_produce(args):
+    """Batch-produce chapters from --from to --to with resume, retry and QPS throttle.
+
+    * --resume  : skip chapters that are already accepted in state.json
+    * --retry N : retry failed chapters up to N times (default 2)
+    * --delay S : minimum seconds between chapter calls / QPS throttle (default 0).
+                  On transient failures (rc!=3), a fixed 2-second back-off is used
+                  regardless of --delay to avoid tight retry loops.
+    """
+    import time as _time
+    from pathlib import Path
+    from codex_writer.core.io import read_json
+    from codex_writer.core.paths import state_path, chapter_brief_path
+
+    _RETRY_BACKOFF = 2.0  # seconds to wait between failure retries (independent of --delay)
+
+    project_root = Path(args.project_root).resolve()
+    from_ch = int(args.from_chapter)
+    to_ch = int(args.to_chapter)
+    max_retries = int(args.retry)
+    inter_delay = float(args.delay)
+
+    # Load accepted chapters from state to support --resume.
+    accepted: set[int] = set()
+    sp = state_path(project_root)
+    if sp.exists():
+        try:
+            state_data = read_json(sp)
+            for k, v in state_data.get("chapters", {}).items():
+                if v.get("status") == "accepted":
+                    accepted.add(int(k))
+        except (OSError, ValueError, TypeError):
+            pass
+
+    results = []
+    skipped = 0
+    succeeded = 0
+    failed = 0
+
+    for ch in range(from_ch, to_ch + 1):
+        if args.resume and ch in accepted:
+            skipped += 1
+            results.append({"chapter": ch, "status": "skipped"})
+            continue
+
+        brief_path = chapter_brief_path(project_root, ch)
+        if not brief_path.exists():
+            results.append({"chapter": ch, "status": "no_brief",
+                            "message": f"第{ch}章任务书缺失，请先运行 plan --chapter {ch}"})
+            failed += 1
+            continue
+
+        attempt = 0
+        last_code = 1
+        while attempt <= max_retries:
+            attempt += 1
+            # Build a fake args namespace for cmd_write reuse.
+            class _WriteArgs:
+                project_root = str(project_root)
+                chapter = str(ch)
+                demo = False
+                no_backup = getattr(args, "no_backup", False)
+                format = "text"
+            rc = cmd_write(_WriteArgs())
+            last_code = rc
+            if rc == 0:
+                break
+            if rc == 3:
+                # Review blocking or foundation error — no point retrying.
+                break
+            # rc==5 (provider failure) or rc==1: retry after back-off.
+            if attempt <= max_retries:
+                _time.sleep(_RETRY_BACKOFF)
+
+        entry = {"chapter": ch, "status": "ok" if last_code == 0 else "failed",
+                 "exit_code": last_code, "attempts": attempt}
+        results.append(entry)
+        if last_code == 0:
+            succeeded += 1
+        else:
+            failed += 1
+
+        if inter_delay > 0 and ch < to_ch:
+            _time.sleep(inter_delay)
+
+    output_json(
+        "produce",
+        ok=failed == 0,
+        project_root=str(project_root),
+        data={
+            "from": from_ch, "to": to_ch,
+            "succeeded": succeeded, "failed": failed, "skipped": skipped,
+            "chapters": results,
+        },
+        errors=[{"code": "PRODUCE_PARTIAL_FAILURE",
+                 "message": f"{failed} 章生成失败", "blocking": False}] if failed else [],
+    )
+    return 0 if failed == 0 else 1
+
+
 def cmd_dashboard(args):
     from pathlib import Path
     from codex_writer.dashboard import build_dashboard, format_dashboard_text, write_dashboard_html
@@ -1963,6 +2131,26 @@ def _register_subparsers(subparsers):
     sp_dashboard.add_argument("--format", type=str, default="text")
     sp_dashboard.add_argument("--output", type=str, default=None)
 
+    sp_produce = subparsers.add_parser("produce", help="批量生产章节（支持断点续写、自动重试、QPS 限速）")
+    sp_produce.add_argument("--project-root", type=str, default=".")
+    sp_produce.add_argument("--from", dest="from_chapter", type=int, required=True, help="起始章节（含）")
+    sp_produce.add_argument("--to", dest="to_chapter", type=int, required=True, help="结束章节（含）")
+    sp_produce.add_argument("--resume", action="store_true", help="跳过已 accepted 的章节")
+    sp_produce.add_argument("--retry", type=int, default=2, help="provider 失败时的最大重试次数（默认 2）")
+    sp_produce.add_argument("--delay", type=float, default=0.0, help="章节间最小等待秒数（QPS 节流，默认 0）")
+    sp_produce.add_argument("--no-backup", action="store_true")
+    sp_produce.add_argument("--format", type=str, default="text")
+
+    sp_chapter = subparsers.add_parser("chapter", help="章节生命周期管理（revert 等）")
+    sp_chapter.add_argument("--project-root", type=str, default=".")
+    sp_chapter.add_argument("--format", type=str, default="text")
+    sub_ch = sp_chapter.add_subparsers(dest="chapter_command")
+    sp_ch_revert = sub_ch.add_parser("revert", help="回退已提交章节以便重写")
+    sp_ch_revert.add_argument("--project-root", type=str, default=".")
+    sp_ch_revert.add_argument("--chapter", type=int, required=True)
+    sp_ch_revert.add_argument("--reason", type=str, default="")
+    sp_ch_revert.add_argument("--format", type=str, default="text")
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="codex-writer", description="Codex Writer CLI")
@@ -2005,6 +2193,8 @@ def main(argv=None):
         "reading-power": cmd_reading_power,
         "learn": cmd_learn,
         "dashboard": cmd_dashboard,
+        "produce": cmd_produce,
+        "chapter": cmd_chapter,
     }
     try:
         return cmd_map[args.command](args)

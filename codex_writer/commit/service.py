@@ -74,7 +74,9 @@ def commit_chapter(project_root: Path, chapter: int, no_backup: bool = False) ->
     }
 
     if not no_backup:
-        create_backup_manifest(project_root, reason=f"第{chapter}章提交前")
+        # Incremental backup: only copies files that changed since the last
+        # snapshot, keeping disk usage O(1) per chapter instead of O(N²).
+        create_backup_manifest(project_root, reason=f"第{chapter}章提交前", incremental=True)
 
     cp = commit_path(project_root, chapter)
     write_json_atomic(cp, commit_data)

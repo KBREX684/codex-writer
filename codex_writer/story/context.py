@@ -121,13 +121,56 @@ def build_context_pack(project_root: Path, chapter: int) -> dict:
     except (ImportError, OSError):
         pass
 
+    # Recent character / entity state changes from SQLite — lets the draft
+    # agent know the latest realm levels, relationship changes, etc.
+    try:
+        from codex_writer.storage.db import connect_db
+        _window = _max_context_chapters()
+        from_chapter = max(1, chapter - _window)
+        with connect_db(project_root) as conn:
+            rows = conn.execute(
+                """
+                SELECT chapter, entity_id, field, old_value, new_value, reason
+                FROM state_changes
+                WHERE chapter >= ? AND chapter < ?
+                ORDER BY chapter DESC, id DESC
+                """,
+                (from_chapter, chapter),
+            ).fetchall()
+        if rows:
+            changes: dict[str, list] = {}
+            for row in rows:
+                key = row["entity_id"]
+                changes.setdefault(key, []).append({
+                    "chapter": row["chapter"],
+                    "field": row["field"],
+                    "before": row["old_value"],
+                    "after": row["new_value"],
+                    "reason": row["reason"],
+                })
+            pack["recent_character_changes"] = changes
+            pack["sources"].append("index.sqlite (state_changes)")
+    except (ImportError, OSError, Exception):
+        pass
+
     try:
         from codex_writer.references.search import search_references
         search_query = ""
         if pack["chapter_brief"]:
-            search_query = pack["chapter_brief"].get("title", "") + " " + pack["chapter_brief"].get("goal", "")
+            brief_ref = pack["chapter_brief"]
+            parts = [
+                brief_ref.get("title", ""),
+                brief_ref.get("goal", ""),
+            ]
+            # Include up to 5 key entities and must_cover_nodes in the search
+            # query so BM25 can surface relevant setting/character references.
+            for kw in brief_ref.get("key_entities", [])[:5]:
+                parts.append(str(kw))
+            for kw in brief_ref.get("must_cover_nodes", [])[:5]:
+                parts.append(str(kw))
+            search_query = " ".join(p for p in parts if p)
         if search_query.strip():
-            hits = search_references(project_root, search_query, top_k=5)
+            hits = search_references(project_root, search_query, top_k=8)
             pack["references_hits"] = hits
             pack["sources"].append("references (BM25)")
     except ImportError:

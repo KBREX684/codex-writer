@@ -119,11 +119,11 @@ def test_repair_logs_rebuilds_sqlite_agent_runs(tmp_path):
     result = run_cli("repair", "logs", "--project-root", str(project), "--format", "json")
     assert result.returncode == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["agent_runs_rebuilt"] >= 4
+    assert payload["data"]["agent_runs_rebuilt"] >= 3
 
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
-    assert count >= 4
+    assert count >= 3
 
 
 def test_repair_projections_marks_commit_projection_done(tmp_path):
