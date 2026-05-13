@@ -484,15 +484,7 @@ def _check_cool_point_cadence(project_root: Path, chapter: int) -> list[dict]:
         try:
             data = read_json(rp)
             prev_issues = data.get("issues", [])
-            has_cool = any(i.get("category") == "logic" and "爽点" not in i.get("description", "") for i in prev_issues)
-            # Count chapters that had no cool_point detected (category=logic, description contains 爽点)
-            missing_cool = not any(
-                i.get("category") == "logic" and "未检测到爽点" not in i.get("description", "")
-                for i in prev_issues
-                if i.get("category") == "logic" and "爽点" in i.get("description", "")
-            )
-            # Simpler: just look for absence of cool-point detection issue being absent
-            # i.e. a chapter had no cool-point warning means it DID have a cool point
+            # A chapter had no cool point if the review emitted an "未检测到爽点" issue.
             had_no_cool_issue = any(
                 "未检测到爽点" in i.get("description", "") for i in prev_issues
             )

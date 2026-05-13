@@ -1658,9 +1658,9 @@ def cmd_chapter(args):
             return 0
 
         reason = getattr(args, "reason", "") or ""
+        from datetime import datetime, timezone as _tz
         commit["meta"]["status"] = "reverted"
-        commit["meta"]["reverted_at"] = __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc).isoformat()
+        commit["meta"]["reverted_at"] = datetime.now(_tz.utc).isoformat()
         commit["meta"]["revert_reason"] = reason
         commit["projection_status"] = {"state": "pending", "summary": "pending",
                                         "memory": "pending", "index": "pending"}
